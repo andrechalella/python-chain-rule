@@ -36,7 +36,7 @@ class FortranFormatter(Formatter):
         parts = [self.format(x) for x in f.args]
         s = ' + '.join(parts)
         s = s.replace('+ -', '- ')
-        return s
+        return f'({s})'
 
     @Formatter.format.register
     def _prod(self, f: Prod) -> str:
@@ -44,8 +44,7 @@ class FortranFormatter(Formatter):
 
     @Formatter.format.register
     def _times(self, f: Times) -> str:
-        expr = self.format(f.f)
-        return f"{self.format(f.n)}*{expr}"
+        return f"{self.format(f.n)}*{self.format(f.f)}"
 
     @Formatter.format.register
     def _minus(self, f: Minus) -> str:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import cast, Any, Iterable, Callable
-from functools import singledispatch
+from functools import singledispatch, cache
 from dataclasses import dataclass
 import math
 import dataclasses
@@ -1039,6 +1039,7 @@ def _flatten(t: type[Function], f: Function) -> _DataClass:
             return func(t, f)
     raise NotImplementedError(f"flatten() has no match for {(t,type(f))}")
 
+@cache
 def extract(f: Function, target_type: Type[Function]) -> set[Function]:
     """
     Recursively extracts all instances of target_type found in Function f.
