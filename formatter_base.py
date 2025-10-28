@@ -15,15 +15,3 @@ class Formatter(ABC):
     @singledispatchmethod
     def format(self, f: Function) -> str:  # default for unknown types
         raise NotImplementedError(f"No formatter registered for type {type(f)}")
-
-    # Optional hooks for function definition emission.
-    def explicit_function_definition(self, f: Function) -> str:
-        """Return a full definition for ExplicitFunction-like objects.
-        Subclasses may override to produce a language-specific definition.
-        """
-        raise NotImplementedError()
-
-    def opaque_function_definition(self, f: Function) -> str:
-        """Return a full definition for OpaqueFunction-like objects.
-        """
-        raise NotImplementedError()

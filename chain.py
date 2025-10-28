@@ -1038,3 +1038,25 @@ def _flatten(t: type[Function], f: Function) -> _DataClass:
         if t is t1 and isinstance(f, t2):
             return func(t, f)
     raise NotImplementedError(f"flatten() has no match for {(t,type(f))}")
+
+def extract(f: Function, target_type: Type[Function]) -> set[Function]:
+    """
+    Recursively extracts all instances of target_type found in Function f.
+    """
+    s: set[Function] = set()
+
+    if isinstance(f, target_type):
+        s.add(f)
+
+    if isinstance(f, FunctionVariadic):
+        for child in f.args:
+            s.update(extract(child, target_type))
+    elif isinstance(f, FunctionWithSingleFunction):
+        s.update(extract(f.f, target_type))
+    elif isinstance(f, Frac):
+        s.update(extract(f.num, target_type))
+        s.update(extract(f.den, target_type))
+    elif isinstance(f, ExplicitFunction):
+        s.update(extract(f.f, target_type))
+
+    return s
