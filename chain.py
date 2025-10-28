@@ -697,7 +697,7 @@ class Arctan(FunctionSimple):
                 return ZERO
             elif f == ONE:
                 return _k(math.pi/4)
-            elif f == ONE:
+            elif f == MINUS_ONE:
                 return _k(-math.pi/4)
             return _k(math.atan(f.number))
         return Arctan(f)
