@@ -709,17 +709,22 @@ class Arctan(FunctionSimple):
     def __str__(self) -> str:
         return f'atan({self.f})'
 
-class UserFunction(Function, _HasName, _HasF, _HasDers):
-    def __init__(self, name: str, f: Function,
-            ders: tuple[Var, ...] = ()) -> None:
+class NamedFunction(Function, _HasName, _HasDers):
+    def __init__(self, name: str, ders: tuple[Var, ...] = ()) -> None:
         _HasName.__init__(self, name)
-        _HasF.__init__(self, f)
         _HasDers.__init__(self, ders)
+        if self.__class__ is NamedFunction:
+            raise TypeError("NamedFunction is just a base class.")
+
+class ExplicitFunction(NamedFunction, _HasF):
+    def __init__(self, name: str, f: Function, ders: tuple[Var, ...] = ()) -> None:
+        super().__init__(name, ders)
+        _HasF.__init__(self, f)
 
     def der(self, v: Var) -> Function:
         d = self.f.der(v)
-        return d if isinstance(d, Const) else \
-            UserFunction(self.name, d, _append_var(self.ders, v))
+        return d if d == ZERO else \
+            ExplicitFunction(self.name, d, _append_var(self.ders, v))
 
     def key(self) -> Any:
         return (self.name, self.f, self.ders)
@@ -727,13 +732,12 @@ class UserFunction(Function, _HasName, _HasF, _HasDers):
     def __str__(self) -> str:
         return _user_function_str(self.name, self.ders)
 
-class OpaqueFunction(Function, _HasName, _HasVars, _HasDers):
+class OpaqueFunction(NamedFunction, _HasVars):
     def __init__(self, name: str,
             vars_: tuple[Var, ...],
             ders : tuple[Var, ...] = ()) -> None:
-        _HasName.__init__(self, name)
+        super().__init__(name, ders)
         _HasVars.__init__(self, vars_)
-        _HasDers.__init__(self, ders)
 
     def der(self, v: Var) -> Function:
         if v in self.vars_:
@@ -888,7 +892,7 @@ _SORT_ORDER = (
     Sin,
     Cos,
     Arctan,
-    UserFunction,
+    ExplicitFunction,
     OpaqueFunction,
     )
 
