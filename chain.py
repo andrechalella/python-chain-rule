@@ -491,7 +491,7 @@ class Frac(Function):
                 dens.append(Pow.factory(den, n))
         del dca_nums, dca_dens, num, den
 
-        prod_list: list[Function] 
+        prod_list: list[Function]
         if not dens:
             prod_list = [*fracs, *nums]
         elif not nums:
