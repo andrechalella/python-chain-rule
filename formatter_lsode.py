@@ -23,8 +23,13 @@ class LsodeFormatter(FortranFormatter):
     @property
     def solution_vector(self) -> list[Var]: return self._solution_vector
 
-    @property
-    def function_vector(self) -> list[Function]: return self._function_vector
+    @cached_property
+    def function_vector(self) -> list[Function]:
+        l = []
+        for i, f in enumerate(self._function_vector):
+            l.append(f if isinstance(f, Var) else
+                        ExplicitFunction(f'{self.function_vector_name}{1+i}', f))
+        return l
 
     @property
     def prefix_function(self) -> str: return self._prefix_function
@@ -108,13 +113,16 @@ class LsodeFormatter(FortranFormatter):
         funcs.update({f for row in self.jacobian for f in row})
         return {nf for f in funcs for nf in extract(f, NamedFunction)}
 
-    def named_functions_name_order(self) -> tuple[NamedFunction, ...]:
+    @property
+    def named_functions_human_order(self) -> tuple[NamedFunction, ...]:
         """
-        NamedFunction objects in alphabetical order (but opaque first), for
-        ease of manually defining.
+        NamedFunction objects in alphabetical order (but opaque and function
+        vector first), for ease of manually defining.
         """
         return tuple(sorted(self.named_functions,
-            key=lambda nf: (1 if isinstance(nf, OpaqueFunction) else 2,
+            key=lambda nf: (1 if isinstance(nf, OpaqueFunction) \
+                            else 2 if nf in self.f_vec \
+                            else 3,
                             nf.name, len(nf.ders), nf.ders)))
 
     @cached_property
