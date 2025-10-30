@@ -1,5 +1,5 @@
 from __future__ import annotations
-from functools import cached_property
+from functools import singledispatchmethod, cached_property
 
 from formatter_fortran import FortranFormatter
 from chain import (
@@ -143,34 +143,35 @@ class LsodeFormatter(FortranFormatter):
     def constant_vector(self) -> list[ConstName]:
         return sorted({c for f in self.named_functions for c in extract(f, ConstName)})
 
+    # Repeating needed because @singledispatchmethod doesn't work well with inheritance
+    @singledispatchmethod
+    def format(self, f: Function) -> str:
+        return super().format(f)
+
     # Overrides for using vectors, e.g turning Var "XG" into "y(1)"
 
-    @FortranFormatter.format.register
+    @format.register
     def _var(self, f: Var) -> str:
         return f'{self.y_str}({1+self.y_vec.index(f)})'
 
-    @FortranFormatter.format.register
+    @format.register
     def _const_name(self, f: ConstName) -> str:
         return f'{self.c_str}({1+self.c_vec.index(f)})'
 
-    @FortranFormatter.format.register
+    @format.register
     def _named(self, f: NamedFunction) -> str:
         return f'{self.aux_str}({1+self.aux_vec.index(f)})'
 
     # Repeating these two is needed because else the more specific ones from
     # FortranFormatter are called
 
-    @FortranFormatter.format.register
+    @format.register
     def _named_explicit(self, f: ExplicitFunction) -> str:
         return self._named(f)
 
-    @FortranFormatter.format.register
+    @format.register
     def _named_opaque(self, f: OpaqueFunction) -> str:
         return self._named(f)
-
-    @FortranFormatter.format.register
-    def _named(self, f: NamedFunction) -> str:
-        return f'{self.aux_str}({1+self.aux_vec.index(f)})'
 
     def _get_function_name(self, f: NamedFunction) -> str:
         return self.prefix_function + self._get_function_str_with_ders(f)
