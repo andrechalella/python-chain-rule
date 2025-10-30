@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Iterable
 from functools import singledispatchmethod, cached_property
 
 from formatter_fortran import FortranFormatter
@@ -21,15 +22,15 @@ class LsodeFormatter(FortranFormatter):
     """
 
     @property
-    def solution_vector(self) -> list[Var]: return self._solution_vector
+    def solution_vector(self) -> tuple[Var, ...]: return self._solution_vector
 
     @cached_property
-    def function_vector(self) -> list[Function]:
+    def function_vector(self) -> tuple[Function, ...]:
         l = []
         for i, f in enumerate(self._function_vector):
             l.append(f if isinstance(f, Var) else
                         ExplicitFunction(f'{self.function_vector_name}{1+i}', f))
-        return l
+        return tuple(l)
 
     @property
     def prefix_function(self) -> str: return self._prefix_function
@@ -50,8 +51,8 @@ class LsodeFormatter(FortranFormatter):
     def float_type(self) -> str: return self._float_type
 
     def __init__(self,
-            solution_vector: list[Var],
-            function_vector: list[Var],
+            solution_vector: Iterable[Var],
+            function_vector: Iterable[Function],
             *,
             prefix_der: str = "_d",
             prefix_function: str = "__",
@@ -62,8 +63,8 @@ class LsodeFormatter(FortranFormatter):
             float_type: str = "double precision",
             ) -> None:
         super().__init__(prefix_der)
-        self._solution_vector = solution_vector
-        self._function_vector = function_vector
+        self._solution_vector = tuple(solution_vector)
+        self._function_vector = tuple(function_vector)
         self._prefix_function = prefix_function
         self._solution_vector_name = solution_vector_name
         self._function_vector_name = function_vector_name
@@ -74,32 +75,34 @@ class LsodeFormatter(FortranFormatter):
     # Shorthands
 
     @property
-    def y_vec(self) -> list[Var]: return self.solution_vector
+    def y_vec(self) -> tuple[Var, ...]: return self.solution_vector
 
     @property
     def y_str(self) -> str: return self.solution_vector_name
 
     @property
-    def f_vec(self) -> list[Var]: return self.function_vector
+    def f_vec(self) -> tuple[Function, ...]: return self.function_vector
 
     @property
     def f_str(self) -> str: return self.function_vector_name
 
     @property
-    def c_vec(self) -> list[Var]: return self.constant_vector
+    def c_vec(self) -> tuple[ConstName, ...]: return self.constant_vector
 
     @property
     def c_str(self) -> str: return self.constant_vector_name
 
     @property
-    def aux_vec(self) -> list[Var]: return self.named_functions_eval_order
+    def aux_vec(self) -> tuple[NamedFunction, ...]: return self.named_functions_eval_order
 
     @property
     def aux_str(self) -> str: return self.aux_vector_name
 
     @cached_property
-    def jacobian(self) -> list[list[Function]]:
-        return [[f.der(v) for v in self.y_vec] for f in self.f_vec]
+    def jacobian(self) -> tuple[tuple[Function, ...], ...]:
+        return tuple([
+                tuple([f.der(v) for v in self.y_vec])
+                    for f in self.f_vec])
 
     @cached_property
     def named_functions(self) -> set[NamedFunction]:
@@ -140,8 +143,9 @@ class LsodeFormatter(FortranFormatter):
                             nf.name, len(nf.ders), nf.ders)))
 
     @cached_property
-    def constant_vector(self) -> list[ConstName]:
-        return sorted({c for f in self.named_functions for c in extract(f, ConstName)})
+    def constant_vector(self) -> tuple[ConstName, ...]:
+        return tuple(sorted(
+            {c for f in self.named_functions for c in extract(f, ConstName)} ))
 
     # Repeating needed because @singledispatchmethod doesn't work well with inheritance
     @singledispatchmethod

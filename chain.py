@@ -2,7 +2,7 @@ from __future__ import annotations
 # this import is so Function can reference itself
 
 from abc import ABC, abstractmethod
-from typing import cast, Any, Iterable, Callable
+from typing import cast, TypeVar, Any, Iterable, Callable
 from functools import singledispatch, cache
 from dataclasses import dataclass
 import math
@@ -900,6 +900,7 @@ _SORT_ORDER = (
 def _get_field_list():
     return dataclasses.field(default_factory=list)
 
+@dataclass
 class _DataClass(ABC):
     @abstractmethod
     def __init__(self) -> None:
@@ -1040,11 +1041,11 @@ def _flatten(t: type[Function], f: Function) -> _DataClass:
     raise NotImplementedError(f"flatten() has no match for {(t,type(f))}")
 
 @cache
-def extract(f: Function, target_type: Type[Function]) -> set[Function]:
+def extract[T: Function](f: Function, target_type: type[T]) -> set[T]:
     """
     Recursively extracts all instances of target_type found in Function f.
     """
-    s: set[Function] = set()
+    s: set[T] = set()
 
     if isinstance(f, target_type):
         s.add(f)
