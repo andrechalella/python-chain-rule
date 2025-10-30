@@ -5,7 +5,7 @@ from functools import singledispatchmethod, cached_property
 from formatter_fortran import FortranFormatter
 from chain import (
     Function, ConstName, Var, NamedFunction, ExplicitFunction, OpaqueFunction,
-    extract
+    ZERO, extract
 )
 
 class LsodeFormatter(FortranFormatter):
@@ -15,94 +15,45 @@ class LsodeFormatter(FortranFormatter):
     Introduces the concept of variable vector (y), function matrix (F),
     Jacobian matrix and implements function definitions
 
-    solution_vector: the "y" of LSODE
-    function_vector: the "f" of y'=f(y)
-    constant_vector: extracted ConstNames go here for reference in Fortran
-    named_functions (aux vector): extracted NamedFunctions go here for memoizing and reference in Fortran
+    Vectors:
+    y   solution vector     the "y" of all ODE systems          INPUT
+    f   function vector     the "f" of y'=f(y)                  INPUT
+    c   constants vector    all ConstNames                      EXTRACTED
+    a   'all' or 'aux'      all NamedFunctions (for memoizing)  EXTRACTED
     """
 
     @property
-    def solution_vector(self) -> tuple[Var, ...]: return self._solution_vector
+    def y(self) -> tuple[Var, ...]: return self._y
 
     @cached_property
-    def function_vector(self) -> tuple[Function, ...]:
+    def f(self) -> tuple[Function, ...]:
+        """
+        This encapsulates non-Var Functions in a NamedFunction 'f{i}'
+        """
         l = []
-        for i, f in enumerate(self._function_vector):
+        for i, f in enumerate(self._f):
             l.append(f if isinstance(f, Var) else
-                        ExplicitFunction(f'{self.function_vector_name}{1+i}', f))
+                        ExplicitFunction(f'f{1+i}', f))
         return tuple(l)
 
     @property
-    def prefix_function(self) -> str: return self._prefix_function
-
-    @property
-    def solution_vector_name(self) -> str: return self._solution_vector_name
-
-    @property
-    def function_vector_name(self) -> str: return self._function_vector_name
-
-    @property
-    def constant_vector_name(self) -> str: return self._constant_vector_name
-
-    @property
-    def aux_vector_name(self) -> str: return self._aux_vector_name
-
-    @property
-    def float_type(self) -> str: return self._float_type
+    def n(self) -> int: return len(self.y)
 
     def __init__(self,
-            solution_vector: Iterable[Var],
-            function_vector: Iterable[Function],
-            *,
-            prefix_der: str = "_d",
-            prefix_function: str = "__",
-            solution_vector_name: str = "y",
-            function_vector_name: str = "f",
-            constant_vector_name: str = "c",
-            aux_vector_name: str = "a",
-            float_type: str = "double precision",
+            y: Iterable[Var],
+            f: Iterable[Function],
             ) -> None:
-        super().__init__(prefix_der)
-        self._solution_vector = tuple(solution_vector)
-        self._function_vector = tuple(function_vector)
-        self._prefix_function = prefix_function
-        self._solution_vector_name = solution_vector_name
-        self._function_vector_name = function_vector_name
-        self._constant_vector_name = constant_vector_name
-        self._aux_vector_name = aux_vector_name
-        self._float_type = float_type
-
-    # Shorthands
+        super().__init__()
+        self._y = tuple(y)
+        self._f = tuple(f)
+        if len(self._y) != len(self._f):
+            raise ValueError("y and f must have the same length (number of equations)")
 
     @property
-    def y_vec(self) -> tuple[Var, ...]: return self.solution_vector
-
-    @property
-    def y_str(self) -> str: return self.solution_vector_name
-
-    @property
-    def f_vec(self) -> tuple[Function, ...]: return self.function_vector
-
-    @property
-    def f_str(self) -> str: return self.function_vector_name
-
-    @property
-    def c_vec(self) -> tuple[ConstName, ...]: return self.constant_vector
-
-    @property
-    def c_str(self) -> str: return self.constant_vector_name
-
-    @property
-    def aux_vec(self) -> tuple[NamedFunction, ...]: return self.named_functions_eval_order
-
-    @property
-    def aux_str(self) -> str: return self.aux_vector_name
-
-    @cached_property
     def jacobian(self) -> tuple[tuple[Function, ...], ...]:
         return tuple([
-                tuple([f.der(v) for v in self.y_vec])
-                    for f in self.f_vec])
+                tuple([f.der(v) for v in self.y])
+                    for f in self.f])
 
     @cached_property
     def named_functions(self) -> set[NamedFunction]:
@@ -112,24 +63,24 @@ class LsodeFormatter(FortranFormatter):
         The result is sorted so that opaque functions come first, for ease of
         finding them to be manually defined later.
         """
-        funcs = set(self.f_vec)
+        funcs = set(self.f)
         funcs.update({f for row in self.jacobian for f in row})
         return {nf for f in funcs for nf in extract(f, NamedFunction)}
 
     @property
-    def named_functions_human_order(self) -> tuple[NamedFunction, ...]:
+    def a_human_order(self) -> tuple[NamedFunction, ...]:
         """
         NamedFunction objects in alphabetical order (but opaque and function
         vector first), for ease of manually defining.
         """
         return tuple(sorted(self.named_functions,
             key=lambda nf: (1 if isinstance(nf, OpaqueFunction) \
-                            else 2 if nf in self.f_vec \
+                            else 2 if nf in self.f \
                             else 3,
                             nf.name, len(nf.ders), nf.ders)))
 
     @cached_property
-    def named_functions_eval_order(self) -> tuple[NamedFunction, ...]:
+    def a_eval_order(self) -> tuple[NamedFunction, ...]:
         """
         NamedFunction objects in the correct order of evaluation.
 
@@ -143,7 +94,7 @@ class LsodeFormatter(FortranFormatter):
                             nf.name, len(nf.ders), nf.ders)))
 
     @cached_property
-    def constant_vector(self) -> tuple[ConstName, ...]:
+    def c(self) -> tuple[ConstName, ...]:
         return tuple(sorted(
             {c for f in self.named_functions for c in extract(f, ConstName)} ))
 
@@ -156,15 +107,15 @@ class LsodeFormatter(FortranFormatter):
 
     @format.register
     def _var(self, f: Var) -> str:
-        return f'{self.y_str}({1+self.y_vec.index(f)})'
+        return f'y({1+self.y.index(f)})'
 
     @format.register
     def _const_name(self, f: ConstName) -> str:
-        return f'{self.c_str}({1+self.c_vec.index(f)})'
+        return f'c({1+self.c.index(f)})'
 
     @format.register
     def _named(self, f: NamedFunction) -> str:
-        return f'{self.aux_str}({1+self.aux_vec.index(f)})'
+        return f'a({1+self.a_eval_order.index(f)})'
 
     # Repeating these two is needed because else the more specific ones from
     # FortranFormatter are called
@@ -178,42 +129,68 @@ class LsodeFormatter(FortranFormatter):
         return self._named(f)
 
     def _get_function_name(self, f: NamedFunction) -> str:
-        return self.prefix_function + self._get_function_str_with_ders(f)
+        """
+        Returns a unique name for Fortran function name.
 
-    def _get_function_args(self):
-        return f'({self.y_str}, {self.c_str}, {self.aux_str})'
+        Format: <e|o>f_[ders]_<name>
+          - ExplicitFunction is 'ef', OpaqueFunction is 'of'
+          - [ders] is in the format 'd5_d1' where numbers a Var indices in y
+        """
+        return '_'.join([
+                {ExplicitFunction: 'ef', OpaqueFunction: 'of'}[type(f)],
+                '_'.join([f'd{self.y.index(v)}' for v in f.ders]),
+                f.name,
+            ])
 
     def get_function_call(self, f: NamedFunction) -> str:
-        return self._get_function_name(f) + self._get_function_args()
+        return self._get_function_name(f) + '(y)'
 
     def _get_function_header(self, f: NamedFunction) -> str:
         lines = []
-        lines.append(f'function {self.get_function_call(f)} result(res)')
-        lines.append(f'  {self.float_type} :: res')
-        lines.append(f'  {self.float_type}, intent(in) :: {self.y_str}({len(self.y_vec)})')
-        lines.append(f'  {self.float_type}, intent(in) :: {self.c_str}({len(self.c_vec)})')
-        lines.append(f'  {self.float_type}, intent(in) :: {self.aux_str}({len(self.aux_vec)})')
+        lines.append(f'double precision function {self.get_function_call(f)} result(res)')
+        lines.append(f'  double precision, intent(in) :: y({self.n})')
         return '\n'.join(lines)
 
     def _get_entire_function(self, f: NamedFunction, body: str) -> str:
         lines = []
         lines.append(body)
         lines.append('end function')
-        return '\n\n'.join([self._get_function_header(f), '\n'.join(lines)])
+        return '\n'.join([self._get_function_header(f), '\n'.join(lines)])
 
     def named_function_definition(self, nf: NamedFunction) -> str:
         body = ('  res = ' + self.format(nf.f)) \
             if isinstance(nf, ExplicitFunction) else '  ! missing opaque definition'
         return self._get_entire_function(nf, body)
 
-    def make_update_aux(self):
+    def make_update_a(self):
         lines = []
-        lines.append(f'subroutine update_aux{self._get_function_args()}')
-        lines.append(f'  {self.float_type}, intent(in) :: {self.y_str}({len(self.y_vec)})')
-        lines.append(f'  {self.float_type}, intent(in) :: {self.c_str}({len(self.c_vec)})')
-        lines.append(f'  {self.float_type}, intent(inout) :: {self.aux_str}({len(self.aux_vec)})')
+        lines.append('subroutine update_a(y)')
+        lines.append(f'  double precision, intent(in) :: y({self.n})')
         lines.append('')
-        for i, nf in enumerate(self.named_functions_eval_order):
-            lines.append(f'  {self.aux_str}[{1+i}] = {self.get_function_call(nf)}')
+        for i, nf in enumerate(self.a_eval_order):
+            lines.append(f'  a[{1+i}] = {self.get_function_call(nf)}')
+        lines.append('end subroutine')
+        return '\n'.join(lines)
+
+    def make_f(self):
+        lines = []
+        lines.append('subroutine f(neq, t, y, ydot)')
+        lines.append('  integer, intent(in) :: neq')
+        lines.append(f'  double precision, intent(in) :: t, y({self.n}), ydot({self.n})')
+        for i, f in enumerate(self.f):
+            lines.append(f'  ydot({1+i}) = {self.format(f)}')
+        lines.append('end subroutine')
+        return '\n'.join(lines)
+
+    def make_jac(self):
+        lines = []
+        lines.append('subroutine jac(neq, t, ml, mu, pd, nrpd)')
+        lines.append('  integer, intent(in) :: neq, ml, mu, nrpd')
+        lines.append(f'  double precision, intent(in) :: t, y({self.n})')
+        lines.append(f'  double precision, intent(out) :: pd(nrpd, {self.n})')
+        for i, row in enumerate(self.jacobian):
+            for j, f in enumerate(row):
+                if f != ZERO:
+                    lines.append(f'  pd({1+i},{1+j}) = {self.format(f)}')
         lines.append('end subroutine')
         return '\n'.join(lines)
