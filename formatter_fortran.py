@@ -27,7 +27,7 @@ class FortranFormatter(Formatter):
 
     @format.register
     def _const(self, f: Const) -> str:
-        return str(f.number)
+        return f'{f.number}D0'
 
     @format.register
     def _const_name(self, f: ConstName) -> str:
@@ -63,6 +63,8 @@ class FortranFormatter(Formatter):
     @format.register
     def _pow(self, f: Pow) -> str:
         # Fortran uses ** for power
+        if f.exp.number.is_integer():
+            return f"({self.format(f.base)})**{int(f.exp.number)}"
         return f"({self.format(f.base)})**{self.format(f.exp)}"
 
     @format.register

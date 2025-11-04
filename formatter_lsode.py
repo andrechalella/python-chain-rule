@@ -3,12 +3,13 @@ from typing import Iterable
 from functools import singledispatchmethod, cached_property
 
 from formatter_fortran import FortranFormatter
+from lsode_main_mixin import LsodeMainMixin
 from chain import (
-    Function, ConstName, Var, NamedFunction, ExplicitFunction, OpaqueFunction,
-    ZERO, extract
+    Function, Const, ConstName, Var, NamedFunction, ExplicitFunction,
+    OpaqueFunction, ZERO, extract
 )
 
-class LsodeFormatter(FortranFormatter):
+class LsodeFormatter(FortranFormatter, LsodeMainMixin):
     """
     Takes FortranFormatter further to allow LSODE use.
 
@@ -30,12 +31,12 @@ class LsodeFormatter(FortranFormatter):
     @cached_property
     def f(self) -> tuple[Function, ...]:
         """
-        This encapsulates non-Var Functions in a NamedFunction 'f{i}'
+        This encapsulates non-trivial Functions in a NamedFunction 'f{i}'
         """
         l = []
         for i, f in enumerate(self._f):
-            l.append(f if isinstance(f, Var) else
-                        ExplicitFunction(f'f{1+i}', f))
+            l.append(f if isinstance(f, NamedFunction) or _is_trivial(f)
+                        else ExplicitFunction(f'f{1+i}', f))
         return tuple(l)
 
     @property
@@ -63,7 +64,7 @@ class LsodeFormatter(FortranFormatter):
     @property
     def jacobian(self) -> tuple[tuple[Function, ...], ...]:
         return tuple([
-                tuple([f.der(v) for v in self.y])
+                tuple([_unpack_if_trivial(f.der(v)) for v in self.y])
                     for f in self.f])
 
     @cached_property
@@ -124,6 +125,13 @@ class LsodeFormatter(FortranFormatter):
         return f'y({1 + self.y.index(f)})'
 
     @format.register
+    def _const(self, f: Const) -> str:
+        """
+        Const as float with 'dp' kind.
+        """
+        return f'{f.number}_dp'
+
+    @format.register
     def _const_name(self, f: ConstName) -> str:
         """
         Outputs the ConstName's reference in the 'y' vector.
@@ -160,33 +168,29 @@ class LsodeFormatter(FortranFormatter):
                 f.name,
             ])
 
-    def get_function_call(self, f: NamedFunction) -> str:
+    def _get_function_call(self, f: NamedFunction) -> str:
         return self._get_function_name(f) + '(y)'
 
     def _get_function_header(self, f: NamedFunction) -> str:
         lines = []
-        lines.append(f'double precision function {self.get_function_call(f)} result(res)')
-        lines.append(f'  double precision, intent(in) :: y(*)')
+        lines.append(f'real(dp) function {self._get_function_call(f)} result(res)')
+        lines.append(f'  real(dp), intent(in) :: y(*)')
         return '\n'.join(lines)
 
-    def _get_entire_function(self, f: NamedFunction, body: str) -> str:
-        lines = []
-        lines.append(body)
-        lines.append('end function')
-        return '\n'.join([self._get_function_header(f), '\n'.join(lines)])
-
-    def named_function_definition(self, nf: NamedFunction) -> str:
-        body = ('  res = ' + self.format(nf.f)) \
-            if isinstance(nf, ExplicitFunction) else '  ! missing opaque definition'
-        return self._get_entire_function(nf, body)
+    def _named_function_definition(self, nf: NamedFunction) -> str:
+        return '\n'.join([
+            self._get_function_header(nf),
+            f'  res = {self.format(nf.f)}' if isinstance(nf, ExplicitFunction) else
+                '  ! missing opaque definition',
+            'end function',
+            ])
 
     def make_update_a(self):
         lines = []
         lines.append('subroutine update_a(y)')
-        lines.append(f'  double precision, intent(inout) :: y(*)')
-        lines.append('')
+        lines.append(f'  real(dp), intent(inout) :: y(*)')
         for nf in self.a_eval_order:
-            lines.append(f'  {self.format(nf)} = {self.get_function_call(nf)}')
+            lines.append(f'  {self.format(nf)} = {self._get_function_call(nf)}')
         lines.append('end subroutine')
         return '\n'.join(lines)
 
@@ -194,7 +198,10 @@ class LsodeFormatter(FortranFormatter):
         lines = []
         lines.append('subroutine f(neq, t, y, ydot)')
         lines.append('  integer, intent(in) :: neq')
-        lines.append(f'  double precision, intent(in) :: t, y(*), ydot(*)')
+        lines.append(f'  real(dp), intent(in) :: t')
+        lines.append(f'  real(dp), intent(inout) :: y(*)')
+        lines.append(f'  real(dp), intent(out) :: ydot(*)')
+        lines.append('  call update_a(y)')
         for i, f in enumerate(self.f):
             lines.append(f'  ydot({1+i}) = {self.format(f)}')
         lines.append('end subroutine')
@@ -202,13 +209,39 @@ class LsodeFormatter(FortranFormatter):
 
     def make_jac(self):
         lines = []
-        lines.append('subroutine jac(neq, t, ml, mu, pd, nrpd)')
+        lines.append('subroutine jac(neq, t, y, ml, mu, pd, nrpd)')
         lines.append('  integer, intent(in) :: neq, ml, mu, nrpd')
-        lines.append(f'  double precision, intent(in) :: t, y(*)')
-        lines.append(f'  double precision, intent(out) :: pd(nrpd, *)')
+        lines.append(f'  real(dp), intent(in) :: t, y(*)')
+        lines.append(f'  real(dp), intent(out) :: pd(nrpd, *)')
         for i, row in enumerate(self.jacobian):
             for j, f in enumerate(row):
                 if f != ZERO:
                     lines.append(f'  pd({1+i},{1+j}) = {self.format(f)}')
         lines.append('end subroutine')
         return '\n'.join(lines)
+
+    def make_function_definitions(self):
+        return '\n\n'.join([self._named_function_definition(cf) for cf in self.a_human_order])
+
+    def make_functions_file(self):
+        return '\n\n'.join([
+            '\n'.join([
+                'module functions',
+                '  use, intrinsic :: iso_c_binding, only: dp => c_double',
+                '  implicit none',
+                'contains',
+                ]),
+            self.make_f(),
+            self.make_jac(),
+            self.make_update_a(),
+            self.make_function_definitions(),
+            'end module functions',
+            ])
+
+def _is_trivial(f: Function) -> bool:
+    return isinstance(f, Const | ConstName | Var)
+
+def _unpack_if_trivial(f: Function) -> Function:
+    if isinstance(f, ExplicitFunction) and _is_trivial(f.f):
+        return f.f
+    return f
