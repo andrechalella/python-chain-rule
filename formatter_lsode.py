@@ -3,13 +3,13 @@ from typing import Iterable
 from functools import singledispatchmethod, cached_property
 
 from formatter_fortran import FortranFormatter
-from lsode_main_mixin import LsodeMainMixin
 from chain import (
     Function, Const, ConstName, Var, NamedFunction, ExplicitFunction,
-    OpaqueFunction, ZERO, extract
+    OpaqueFunction, ZERO, extract,
 )
+import lsode_program
 
-class LsodeFormatter(FortranFormatter, LsodeMainMixin):
+class LsodeFormatter(FortranFormatter):
     """
     Takes FortranFormatter further to allow LSODE use.
 
@@ -168,75 +168,71 @@ class LsodeFormatter(FortranFormatter, LsodeMainMixin):
                 f.name,
             ])
 
-    def _get_function_call(self, f: NamedFunction) -> str:
-        return self._get_function_name(f) + '(y)'
-
-    def _get_function_header(self, f: NamedFunction) -> str:
-        lines = []
-        lines.append(f'real(dp) function {self._get_function_call(f)} result(res)')
-        lines.append(f'  real(dp), intent(in) :: y(*)')
-        return '\n'.join(lines)
-
     def _named_function_definition(self, nf: NamedFunction) -> str:
-        return '\n'.join([
-            self._get_function_header(nf),
-            f'  res = {self.format(nf.f)}' if isinstance(nf, ExplicitFunction) else
-                '  ! missing opaque definition',
-            'end function',
-            ])
+        return _TEMPLATE_FUNCTION_DEFINITION.format(
+                name=self._get_function_name(nf),
+                body=
+                    f'  res = {self.format(nf.f)}' \
+                        if isinstance(nf, ExplicitFunction) else
+                        '  ! missing opaque definition')
 
-    def make_update_a(self):
-        lines = []
-        lines.append('subroutine update_a(y)')
-        lines.append(f'  real(dp), intent(inout) :: y(*)')
-        for nf in self.a_eval_order:
-            lines.append(f'  {self.format(nf)} = {self._get_function_call(nf)}')
-        lines.append('end subroutine')
-        return '\n'.join(lines)
+    def _make_update_a(self):
+        assignments = [f'  {self.format(nf)} = {self._get_function_name(nf)}(y)' \
+            for nf in self.a_eval_order]
+        return _TEMPLATE_UPDATE_A.format('\n'.join(assignments))
 
-    def make_f(self):
-        lines = []
-        lines.append('subroutine f(neq, t, y, ydot)')
-        lines.append('  integer, intent(in) :: neq')
-        lines.append(f'  real(dp), intent(in) :: t')
-        lines.append(f'  real(dp), intent(inout) :: y(*)')
-        lines.append(f'  real(dp), intent(out) :: ydot(*)')
-        lines.append('  call update_a(y)')
-        for i, f in enumerate(self.f):
-            lines.append(f'  ydot({1+i}) = {self.format(f)}')
-        lines.append('end subroutine')
-        return '\n'.join(lines)
+    def _make_f(self):
+        assignments = [f'  ydot({1+i}) = {self.format(f)}' for i, f in enumerate(self.f)]
+        return _TEMPLATE_F.format('\n'.join(assignments))
 
-    def make_jac(self):
-        lines = []
-        lines.append('subroutine jac(neq, t, y, ml, mu, pd, nrpd)')
-        lines.append('  integer, intent(in) :: neq, ml, mu, nrpd')
-        lines.append(f'  real(dp), intent(in) :: t, y(*)')
-        lines.append(f'  real(dp), intent(out) :: pd(nrpd, *)')
+    def _make_jac(self):
+        assignments = []
         for i, row in enumerate(self.jacobian):
             for j, f in enumerate(row):
                 if f != ZERO:
-                    lines.append(f'  pd({1+i},{1+j}) = {self.format(f)}')
-        lines.append('end subroutine')
-        return '\n'.join(lines)
+                    assignments.append(f'  pd({1+i},{1+j}) = {self.format(f)}')
+        return _TEMPLATE_JAC.format('\n'.join(assignments))
 
-    def make_function_definitions(self):
+    def _make_function_definitions(self):
         return '\n\n'.join([self._named_function_definition(cf) for cf in self.a_human_order])
 
     def make_functions_file(self):
-        return '\n\n'.join([
-            '\n'.join([
-                'module functions',
-                '  use, intrinsic :: iso_c_binding, only: dp => c_double',
-                '  implicit none',
-                'contains',
-                ]),
-            self.make_f(),
-            self.make_jac(),
-            self.make_update_a(),
-            self.make_function_definitions(),
-            'end module functions',
-            ])
+        return _TEMPLATE_FUNCTIONS_FILE.format(
+            f=self._make_f(),
+            jac=self._make_jac(),
+            update_a=self._make_update_a(),
+            functions=self._make_function_definitions(),
+            )
+
+    def make_program_file(self,
+                  *,
+                  y0: Iterable[float],
+                  t0: float = 0.,
+                  tout: float,
+                  rtol: float | Iterable[float],
+                  atol: float | Iterable[float],
+                  num_steps: int = 1,
+                  tout_multiplier: float = 10.,
+                  mf: int = 21,
+                  itask: int = 1,
+                  iopt: int = 0,
+                  ) -> str:
+
+        return lsode_program.make_program_file(
+                  neq=self.neq,
+                  n_yca=self.n_yca,
+                  y0 = y0,
+                  t0 = t0,
+                  tout = tout,
+                  rtol = rtol,
+                  atol = atol,
+                  num_steps = num_steps,
+                  tout_multiplier = tout_multiplier,
+                  mf = mf,
+                  itask = itask,
+                  iopt = iopt,
+                  )
+
 
 def _is_trivial(f: Function) -> bool:
     return isinstance(f, Const | ConstName | Var)
@@ -245,3 +241,49 @@ def _unpack_if_trivial(f: Function) -> Function:
     if isinstance(f, ExplicitFunction) and _is_trivial(f.f):
         return f.f
     return f
+
+_TEMPLATE_FUNCTION_DEFINITION = """\
+real(dp) function {name}(y) result(res)
+  real(dp), intent(in) :: y(*)
+{body}
+end function"""
+
+_TEMPLATE_UPDATE_A = """\
+subroutine update_a(y)
+  real(dp), intent(inout) :: y(*)
+{}
+end subroutine"""
+
+_TEMPLATE_F = """\
+subroutine f(neq, t, y, ydot)
+  integer, intent(in) :: neq
+  real(dp), intent(in) :: t
+  real(dp), intent(inout) :: y(*)
+  real(dp), intent(out) :: ydot(*)
+  call update_a(y)
+{}
+end subroutine"""
+
+_TEMPLATE_JAC = """\
+subroutine jac(neq, t, y, ml, mu, pd, nrpd)
+  integer, intent(in) :: neq, ml, mu, nrpd
+  real(dp), intent(in) :: t, y(*)
+  real(dp), intent(out) :: pd(nrpd, *)
+{}
+end subroutine"""
+
+_TEMPLATE_FUNCTIONS_FILE = """\
+module functions
+  use, intrinsic :: iso_c_binding, only: dp => c_double
+  implicit none
+contains
+
+{f}
+
+{jac}
+
+{update_a}
+
+{functions}
+
+end"""

@@ -18,8 +18,10 @@ lf = LsodeFormatter((y1, y2, y3), (
 with open('fex.f90', 'w') as f:
     f.write(lf.make_functions_file())
 with open('ex.f90', 'w') as f:
-    f.write(lf.make_main(['1.0_dp','.0_dp','.0_dp'],
-                       '.0_dp',
-                       '.4_dp',
-                       '1e-4_dp',
-                       ['1e-6_dp','1e-10_dp','1e-6_dp']))
+    f.write(lf.make_program_file(
+                y0=[1.0, .0, .0],
+                tout=.4,
+                rtol=1e-4,
+                atol=[1e-6, 1e-10, 1e-6],
+                num_steps=12,
+                ))
