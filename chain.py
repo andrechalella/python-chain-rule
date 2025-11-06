@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import cast, Any, Iterable, Callable
-from collections.abc import Hashable
-from functools import cache
+from functools import singledispatch
 from dataclasses import dataclass
 import math
 import dataclasses
@@ -34,28 +33,13 @@ class _HasDers:
     def ders(self) -> tuple[Var, ...]: return self._ders
     def __init__(self, ders: tuple[Var, ...]) -> None: self._ders = ders
 
-class _HasKey(ABC):
-    @abstractmethod
-    def key(self) -> Any:
-        pass
-
-class _ExtractableMixin(_HasKey):
-    # Hashable is needed for the @cache decorator in _extract_any, but this is a
-    # bug (mypy bugs 11469 and 11470), since type objects are always hashable
-    def extract[T: Hashable](self, t: type[T]) -> set[T]:
-        """
-        Recursively extracts all instances of a given type found in self and
-        children (self.key).  This is key for formatters (like LsodeFormatter)
-        to do important things like find all ConstNames of a system or build
-        function dependency graphs.
-        """
-        s1 = {self} if isinstance(self, t) else set()
-        s2 = _extract_any(self.key(), t)
-        return s1 | s2
-
-class Function(_ExtractableMixin, _HasKey, ABC):
+class Function(ABC):
     @abstractmethod
     def der(self, v: Var) -> Function:
+        pass
+
+    @abstractmethod
+    def key(self) -> Any:
         pass
 
     def __lt__(self, other: object) -> bool:
@@ -265,9 +249,13 @@ HALF     : Const = Const.factory(.5)
 MINUS_ONE: Const = Const.factory(-1)
 PI       : Const = Const.factory(math.pi)
 
-class ConstName(Function, _HasName):
+class ConstName(Function):
+    @property
+    def name(self) -> str:
+        return self._name
+
     def __init__(self, name: str) -> None:
-        _HasName.__init__(self, name)
+        self._name = name
 
     def key(self) -> Any:
         return self.name
@@ -503,7 +491,7 @@ class Frac(Function):
                 dens.append(Pow.factory(den, n))
         del dca_nums, dca_dens, num, den
 
-        prod_list: list[Function]
+        prod_list: list[Function] 
         if not dens:
             prod_list = [*fracs, *nums]
         elif not nums:
@@ -721,20 +709,17 @@ class Arctan(FunctionSimple):
     def __str__(self) -> str:
         return f'atan({self.f})'
 
-class NamedFunction(Function, _HasName, _HasDers):
-    def __init__(self, name: str, ders: tuple[Var, ...] = ()) -> None:
+class UserFunction(Function, _HasName, _HasF, _HasDers):
+    def __init__(self, name: str, f: Function,
+            ders: tuple[Var, ...] = ()) -> None:
         _HasName.__init__(self, name)
-        _HasDers.__init__(self, ders)
-
-class ExplicitFunction(NamedFunction, _HasF):
-    def __init__(self, name: str, f: Function, ders: tuple[Var, ...] = ()) -> None:
-        super().__init__(name, ders)
         _HasF.__init__(self, f)
+        _HasDers.__init__(self, ders)
 
     def der(self, v: Var) -> Function:
         d = self.f.der(v)
-        return d if d == ZERO else \
-            ExplicitFunction(self.name, d, _append_var(self.ders, v))
+        return d if isinstance(d, Const) else \
+            UserFunction(self.name, d, _append_var(self.ders, v))
 
     def key(self) -> Any:
         return (self.name, self.f, self.ders)
@@ -742,12 +727,13 @@ class ExplicitFunction(NamedFunction, _HasF):
     def __str__(self) -> str:
         return _user_function_str(self.name, self.ders)
 
-class OpaqueFunction(NamedFunction, _HasVars):
+class OpaqueFunction(Function, _HasName, _HasVars, _HasDers):
     def __init__(self, name: str,
             vars_: tuple[Var, ...],
             ders : tuple[Var, ...] = ()) -> None:
-        super().__init__(name, ders)
+        _HasName.__init__(self, name)
         _HasVars.__init__(self, vars_)
+        _HasDers.__init__(self, ders)
 
     def der(self, v: Var) -> Function:
         if v in self.vars_:
@@ -902,7 +888,7 @@ _SORT_ORDER = (
     Sin,
     Cos,
     Arctan,
-    ExplicitFunction,
+    UserFunction,
     OpaqueFunction,
     )
 
@@ -910,7 +896,6 @@ _SORT_ORDER = (
 def _get_field_list():
     return dataclasses.field(default_factory=list)
 
-@dataclass
 class _DataClass(ABC):
     @abstractmethod
     def __init__(self) -> None:
@@ -1049,22 +1034,3 @@ def _flatten(t: type[Function], f: Function) -> _DataClass:
         if t is t1 and isinstance(f, t2):
             return func(t, f)
     raise NotImplementedError(f"flatten() has no match for {(t,type(f))}")
-
-@cache
-def _extract_any[T: Hashable](o: Any, t: type[T]) -> set[T]:
-    if isinstance(o, _ExtractableMixin):
-        return o.extract(t)
-
-    s = set()
-    if isinstance(o, t):
-        s.add(o)
-    if isinstance(o, str | bytes | bytearray):
-        pass
-    elif isinstance(o, list | set | tuple):
-        s.update({ooo for oo in o for ooo in _extract_any(oo, t)})
-    elif isinstance(o, dict):
-        for collection in o.keys(), o.values():
-            s.update({ooo for oo in collection for ooo in _extract_any(oo, t)})
-    elif isinstance(o, Iterable):
-        raise NotImplementedError('Not ready for {type(o)}')
-    return s

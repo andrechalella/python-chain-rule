@@ -477,7 +477,7 @@ class GeminiTestClass(TestCase):
         self.assertEqual(str(fracf(ONE, minusf(X))), '-1/x')
 
     # ======================================================================
-    # == Trig / Explicit / Opaque Function Tests
+    # == Trig / User / Opaque Function Tests
     # ======================================================================
 
     def test_sin_cos_factory(self):
@@ -526,17 +526,17 @@ class GeminiTestClass(TestCase):
         self.assertEqual(arctanf(sqf(X)).der(X),
             pf(invf(sf(ONE, powf(X, 4))), tf(X, TWO)))
 
-    def test_explicit_function(self):
-        """Tests ExplicitFunction behavior."""
+    def test_user_function(self):
+        """Tests UserFunction behavior."""
         name = 'cosxy'
         f = cosf(sf(tf(X,k(2)),tf(Y,k(3))))
-        uf = ExplicitFunction(name, f)
+        uf = UserFunction(name, f)
 
         # Check derivatives
-        dufx = ExplicitFunction(name, f.der(X), (X,))
-        dufy = ExplicitFunction(name, f.der(Y), (Y,))
-        dufxy = ExplicitFunction(name, f.der(X).der(Y), (X,Y))
-        dufyx = ExplicitFunction(name, f.der(Y).der(X), (Y,X))
+        dufx = UserFunction(name, f.der(X), (X,))
+        dufy = UserFunction(name, f.der(Y), (Y,))
+        dufxy = UserFunction(name, f.der(X).der(Y), (X,Y))
+        dufyx = UserFunction(name, f.der(Y).der(X), (Y,X))
 
         self.assertEqual(uf.der(X), dufx)
         self.assertEqual(uf.der(Y), dufy)
