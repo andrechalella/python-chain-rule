@@ -362,14 +362,14 @@ class ChainTestClass(TestCase):
         for x, y in lst:
             self.assertEqual(cf(k(x)), y)
 
-    def test_user_function(self):
+    def test_explicit_function(self):
         name = 'cosxy'
         f = Cos.factory(Sum(Times(X,k(2)),Times(Y,k(3))))
-        uf = UserFunction(name, f)
-        dufx = UserFunction(name, f.der(X), (X,))
-        dufy = UserFunction(name, f.der(Y), (Y,))
-        dufxy = UserFunction(name, f.der(X).der(Y), (X,Y))
-        dufyx = UserFunction(name, f.der(Y).der(X), (Y,X))
+        uf = ExplicitFunction(name, f)
+        dufx = ExplicitFunction(name, f.der(X), (X,))
+        dufy = ExplicitFunction(name, f.der(Y), (Y,))
+        dufxy = ExplicitFunction(name, f.der(X).der(Y), (X,Y))
+        dufyx = ExplicitFunction(name, f.der(Y).der(X), (Y,X))
         self.assertEqual(uf.der(X), dufx)
         self.assertEqual(uf.der(Y), dufy)
         self.assertEqual(uf.der(X).der(Y), dufxy)
