@@ -5,7 +5,7 @@ from functools import singledispatchmethod, cached_property
 from formatter_fortran import FortranFormatter
 from chain import (
     Function, Const, ConstName, Var, NamedFunction, ExplicitFunction,
-    OpaqueFunction, ZERO, extract,
+    OpaqueFunction, ZERO
 )
 import lsode_program
 
@@ -77,7 +77,7 @@ class LsodeFormatter(FortranFormatter):
         """
         funcs = set(self.f)
         funcs.update({f for row in self.jacobian for f in row})
-        return {nf for f in funcs for nf in extract(f, NamedFunction)}
+        return {nf for f in funcs for nf in f.extract(NamedFunction)}
 
     @property
     def a_human_order(self) -> tuple[NamedFunction, ...]:
@@ -102,13 +102,13 @@ class LsodeFormatter(FortranFormatter):
         many functions each uses, and ordering ascending.
         """
         return tuple(sorted(self.a_set,
-            key=lambda nf: (len(extract(nf, NamedFunction)),
+            key=lambda nf: (len(nf.extract(NamedFunction)),
                             nf.name, len(nf.ders), nf.ders)))
 
     @cached_property
     def c(self) -> tuple[ConstName, ...]:
         return tuple(sorted(
-            {c for f in self.a_set for c in extract(f, ConstName)} ))
+            {c for f in self.a_set for c in f.extract(ConstName)} ))
 
     # Repeating needed because @singledispatchmethod doesn't work well with inheritance
     @singledispatchmethod
@@ -163,7 +163,7 @@ class LsodeFormatter(FortranFormatter):
         """
         return '_'.join([
                 {ExplicitFunction: 'ef', OpaqueFunction: 'of'}[type(f)],
-                f'n{len(extract(f, NamedFunction))}',
+                f'n{len(f.extract(NamedFunction))}',
                 '_'.join([f'd{self.y.index(v)}' for v in f.ders]),
                 f.name,
             ])
@@ -205,32 +205,34 @@ class LsodeFormatter(FortranFormatter):
             )
 
     def make_program_file(self,
-                  *,
-                  y0: Iterable[float],
-                  t0: float = 0.,
-                  tout: float,
-                  rtol: float | Iterable[float],
-                  atol: float | Iterable[float],
-                  num_steps: int = 1,
-                  tout_multiplier: float = 10.,
-                  mf: int = 21,
-                  itask: int = 1,
-                  iopt: int = 0,
-                  ) -> str:
+                          *,
+                          y0: Iterable[float],
+                          t0: float = 0.,
+                          consts: dict[ConstName, float],
+                          tout: float,
+                          rtol: float | Iterable[float],
+                          atol: float | Iterable[float],
+                          num_steps: int = 1,
+                          tout_multiplier: float = 10.,
+                          mf: int = 21,
+                          itask: int = 1,
+                          iopt: int = 0,
+                          ) -> str:
 
         return lsode_program.make_program_file(
                   neq=self.neq,
                   n_yca=self.n_yca,
-                  y0 = y0,
-                  t0 = t0,
-                  tout = tout,
-                  rtol = rtol,
-                  atol = atol,
-                  num_steps = num_steps,
-                  tout_multiplier = tout_multiplier,
-                  mf = mf,
-                  itask = itask,
-                  iopt = iopt,
+                  y0=y0,
+                  t0=t0,
+                  consts=((self.neq + i, c.name, consts[c]) for i, c in enumerate(self.c)),
+                  tout=tout,
+                  rtol=rtol,
+                  atol=atol,
+                  num_steps=num_steps,
+                  tout_multiplier=tout_multiplier,
+                  mf=mf,
+                  itask=itask,
+                  iopt=iopt,
                   )
 
 

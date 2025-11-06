@@ -1,19 +1,20 @@
 from typing import Iterable
 
 def make_program_file(*,
-              neq: int,
-              n_yca: int,
-              y0: Iterable[float],
-              t0: float = 0.,
-              tout: float,
-              rtol: float | Iterable[float],
-              atol: float | Iterable[float],
-              num_steps: int = 1,
-              tout_multiplier: float = 10.,
-              mf: int = 21,
-              itask: int = 1,
-              iopt: int = 0,
-              ) -> str:
+                      neq: int,
+                      n_yca: int,
+                      y0: Iterable[float],
+                      t0: float = 0.,
+                      consts: Iterable[tuple[int, str, float]],
+                      tout: float,
+                      rtol: float | Iterable[float],
+                      atol: float | Iterable[float],
+                      num_steps: int = 1,
+                      tout_multiplier: float = 10.,
+                      mf: int = 21,
+                      itask: int = 1,
+                      iopt: int = 0,
+                      ) -> str:
     """
     Generates a modern Fortran main program to run a DLSODE simulation,
     based on the dlsode.f example driver.
@@ -52,9 +53,8 @@ def make_program_file(*,
     else:
         raise NotImplementedError(f"LRW/LIW calculation for MF={mf} is not implemented.")
 
-    y_init = []
-    for i, val in enumerate(y_init_list):
-        y_init.append(f'  y({1+i}) = {_dp(val)}')
+    y_init = [f'  y({1+i}) = {_dp(val)}' for i, val in enumerate(y_init_list)]
+    consts_init = [f'  y({1+i}) = {_dp(val):30} ! {name}' for i, name, val in consts]
 
     # Dynamically create the WRITE statement using an inline format string
     y_list = ", ".join([f"y({i+1})" for i in range(neq)])
@@ -77,6 +77,7 @@ def make_program_file(*,
             tout=_dp(tout),
             tout_multiplier=_dp(tout_multiplier),
             y_init='\n'.join(y_init),
+            consts_init='\n'.join(consts_init),
             num_steps=num_steps,
             y_list=y_list,
             inline_write_format=inline_write_format,
@@ -149,7 +150,11 @@ program lsode_program
   t = {t0}
   tout = {tout}
 
+  ! y0
 {y_init}
+
+  ! Constants
+{consts_init}
 
   ! --- Integration Loop ---
   do iout = 1, {num_steps}
