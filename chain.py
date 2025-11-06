@@ -124,17 +124,17 @@ class Function(_ExtractableMixin, _HasKey, ABC):
         key = repr(self.key())
         if key[0] != '(':
             key = f'({key})'
-        return f'{type(self).__name__}{key}' # type: ignore
+        return f'{type(self).__name__}{key}'
 
     def __hash__(self) -> int:
-        return hash(( type(self), self.key() )) # type: ignore
+        return hash(( type(self), self.key() ))
 
 class FunctionVariadic(Function):
     @property
     def args(self) -> tuple[Function, ...]:
         return self._args
 
-    def key(self) -> Any:
+    def key(self) -> tuple[Function, ...]:
         return self.args
 
     def __init__(self, *args: Function) -> None:
@@ -172,11 +172,11 @@ class FunctionSimple(FunctionWithSingleFunction):
     def copy(self, f: Function) -> Function:
         return self.factory(f)
 
-    def key(self) -> Any:
+    def key(self) -> Function:
         return self.f
 
 class FunctionWithCardinality(FunctionWithSingleFunction, _HasN):
-    def key(self) -> Any:
+    def key(self) -> tuple[Function, ...]:
         return (self.f, self.n)
 
     def __init__(self, f: Function, n: Const):
@@ -208,7 +208,7 @@ class Const(Function):
     def __init__(self, number: float) -> None:
         self._number = float(number)
 
-    def key(self) -> Any:
+    def key(self) -> float:
         return self.number
 
     def der(self, v: Var) -> Const:
@@ -269,7 +269,7 @@ class ConstName(Function, _HasName):
     def __init__(self, name: str) -> None:
         _HasName.__init__(self, name)
 
-    def key(self) -> Any:
+    def key(self) -> str:
         return self.name
 
     def der(self, v: Var) -> Const:
@@ -282,7 +282,7 @@ class Var(Function, _HasName):
     def __init__(self, name: str) -> None:
         _HasName.__init__(self, name)
 
-    def key(self) -> Any:
+    def key(self) -> str:
         return self.name
 
     def der(self, v: Var) -> Const:
@@ -389,7 +389,7 @@ class Times(FunctionWithCardinality):
         del nf
 
         if isinstance(f, Times):
-            n = cast(Const, n*f.n)
+            n = n*f.n
             f = f.f
 
         if n == ZERO:
@@ -413,7 +413,7 @@ class Times(FunctionWithCardinality):
         else:
             return f'{self.n}*{self.f}'
 
-class Minus(Times, FunctionSimple):
+class Minus(Times):
     @staticmethod
     def factory(
             ff: Function | float,
@@ -517,7 +517,7 @@ class Frac(Function):
         else:
             return Times.factory(prod_list[0], k)
 
-    def key(self):
+    def key(self) -> tuple[Function, ...]:
         return (self.num, self.den)
 
     def __init__(self, num: Function, den: Function):
@@ -533,7 +533,7 @@ class Frac(Function):
                 )),
                 Sq.factory(self.den))
 
-    def __str__(self):
+    def __str__(self) -> str:
         den = str(self.den) if isinstance(self.den, Minus) else \
                 _parens_if_sum_prod_frac_times(self.den)
         return f'{_parens_if_sum(self.num)}/{den}'
@@ -610,7 +610,7 @@ class Pow(FunctionWithCardinality):
     def __str__(self) -> str:
         return f'{_parens_if_sum_prod_frac_times(self.base)}^{self.exp}'
 
-class Sq(Pow, FunctionSimple):
+class Sq(Pow):
     @staticmethod
     def factory(base: Function, expf: Const | float = TWO) -> Function:
         exp = _fix_const(expf)
@@ -624,7 +624,7 @@ class Sq(Pow, FunctionSimple):
     def __init__(self, base: Function) -> None:
         super().__init__(base, TWO)
 
-class Sqrt(Pow, FunctionSimple):
+class Sqrt(Pow):
     @staticmethod
     def factory(base: Function, expf: Const | float = HALF) -> Function:
         exp = _fix_const(expf)
@@ -638,7 +638,7 @@ class Sqrt(Pow, FunctionSimple):
     def __init__(self, base: Function) -> None:
         super().__init__(base, HALF)
 
-class Inv(Pow, FunctionSimple):
+class Inv(Pow):
     @staticmethod
     def factory(f: Function, expf: Const | float = MINUS_ONE) -> Function:
         exp = _fix_const(expf)
@@ -736,7 +736,7 @@ class ExplicitFunction(NamedFunction, _HasF):
         return d if d == ZERO else \
             ExplicitFunction(self.name, d, _append_var(self.ders, v))
 
-    def key(self) -> Any:
+    def key(self) -> tuple[Any, ...]:
         return (self.name, self.f, self.ders)
 
     def __str__(self) -> str:
@@ -756,7 +756,7 @@ class OpaqueFunction(NamedFunction, _HasVars):
         else:
             return ZERO
 
-    def key(self) -> Any:
+    def key(self) -> tuple[Any, ...]:
         return (self.name, self.vars_, self.ders)
 
     def __str__(self) -> str:
@@ -906,28 +906,24 @@ _SORT_ORDER = (
     OpaqueFunction,
     )
 
-# classes should not have [] as default list value
-def _get_field_list():
-    return dataclasses.field(default_factory=list)
-
 @dataclass
 class _DataClass(ABC):
     @abstractmethod
     def __init__(self) -> None:
         pass
 
+# default_factory: classes should not have [] as default list value
+
 @dataclass
 class _DataSum(_DataClass):
-    consts:    list[Const]    = _get_field_list()
-    functions: list[Function] = _get_field_list()
+    consts:    list[Const]    = dataclasses.field(default_factory=list)
+    functions: list[Function] = dataclasses.field(default_factory=list)
 
 @dataclass
 class _DataFrac(_DataClass):
-    consts: list[Const]    = _get_field_list()
-    nums:   list[Function] = _get_field_list()
-    dens:   list[Function] = _get_field_list()
-
-del _get_field_list
+    consts: list[Const]    = dataclasses.field(default_factory=list)
+    nums:   list[Function] = dataclasses.field(default_factory=list)
+    dens:   list[Function] = dataclasses.field(default_factory=list)
 
 def _merge_datas(*args: _DataClass) -> _DataClass:
     match len(args):

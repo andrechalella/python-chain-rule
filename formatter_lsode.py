@@ -176,16 +176,16 @@ class LsodeFormatter(FortranFormatter):
                         if isinstance(nf, ExplicitFunction) else
                         '  ! missing opaque definition')
 
-    def _make_update_a(self):
+    def _make_update_a(self) -> str:
         assignments = [f'  {self.format(nf)} = {self._get_function_name(nf)}(y)' \
             for nf in self.a_eval_order]
         return _TEMPLATE_UPDATE_A.format('\n'.join(assignments))
 
-    def _make_f(self):
+    def _make_f(self) -> str:
         assignments = [f'  ydot({1+i}) = {self.format(f)}' for i, f in enumerate(self.f)]
         return _TEMPLATE_F.format('\n'.join(assignments))
 
-    def _make_jac(self):
+    def _make_jac(self) -> str:
         assignments = []
         for i, row in enumerate(self.jacobian):
             for j, f in enumerate(row):
@@ -193,10 +193,10 @@ class LsodeFormatter(FortranFormatter):
                     assignments.append(f'  pd({1+i},{1+j}) = {self.format(f)}')
         return _TEMPLATE_JAC.format('\n'.join(assignments))
 
-    def _make_function_definitions(self):
+    def _make_function_definitions(self) -> str:
         return '\n\n'.join([self._named_function_definition(cf) for cf in self.a_human_order])
 
-    def make_functions_file(self):
+    def make_functions_file(self) -> str:
         return _TEMPLATE_FUNCTIONS_FILE.format(
             f=self._make_f(),
             jac=self._make_jac(),
