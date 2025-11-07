@@ -27,12 +27,12 @@ class _HasN:
 class _HasVars:
     @property
     def vars_(self) -> tuple[Var, ...]: return self._vars_
-    def __init__(self, vars_: tuple[Var, ...]) -> None: self._vars_ = vars_
+    def __init__(self, vars_: Iterable[Var]) -> None: self._vars_ = tuple(vars_)
 
 class _HasDers:
     @property
     def ders(self) -> tuple[Var, ...]: return self._ders
-    def __init__(self, ders: tuple[Var, ...]) -> None: self._ders = ders
+    def __init__(self, ders: Iterable[Var]) -> None: self._ders = tuple(ders)
 
 class _HasKey(ABC):
     @abstractmethod
@@ -722,25 +722,25 @@ class Arctan(FunctionSimple):
         return f'atan({self.f})'
 
 class NamedFunction(Function, _HasName, _HasDers):
-    def __init__(self, name: str, ders: tuple[Var, ...] = ()) -> None:
+    def __init__(self, name: str, ders: Iterable[Var] = ()) -> None:
         _HasName.__init__(self, name)
         _HasDers.__init__(self, ders)
 
 class ExplicitFunction(NamedFunction, _HasF):
-    def __init__(self, name: str, f: Function, ders: tuple[Var, ...] = ()) -> None:
+    def __init__(self, name: str, f: Function, ders: Iterable[Var] = ()) -> None:
         super().__init__(name, ders)
         _HasF.__init__(self, f)
 
     def der(self, v: Var) -> Function:
         d = self.f.der(v)
-        return d if d == ZERO else \
+        return ZERO if d == ZERO else \
             ExplicitFunction(self.name, d, _append_var(self.ders, v))
 
     def key(self) -> tuple[Any, ...]:
         return (self.name, self.f, self.ders)
 
     def __str__(self) -> str:
-        return _user_function_str(self.name, self.ders)
+        return _named_function_str(self.name, self.ders)
 
 class OpaqueFunction(NamedFunction, _HasVars):
     def __init__(self, name: str,
@@ -760,9 +760,9 @@ class OpaqueFunction(NamedFunction, _HasVars):
         return (self.name, self.vars_, self.ders)
 
     def __str__(self) -> str:
-        return _user_function_str(self.name, self.ders)
+        return _named_function_str(self.name, self.ders)
 
-def _user_function_str(name: str, ders: tuple[Var, ...]) -> str:
+def _named_function_str(name: str, ders: tuple[Var, ...]) -> str:
     if not ders:
         #return f'f[{name}]'
         return name
@@ -863,10 +863,7 @@ def _fix_const(x: Const | float) -> Const:
     return cast(Const, _fix_const_if_float(x))
 
 def _fix_const_if_float(x: Function | float) -> Function:
-    if isinstance(x, int | float):
-        return _k(x)
-    else:
-        return x
+    return _k(x) if isinstance(x, int | float) else x
 
 def _fix_consts_in_iterable(it: Iterable[Function | float]) -> list[Function]:
     ret: list[Function] = []
@@ -1064,3 +1061,111 @@ def _extract_any[T: Hashable](o: Any, t: type[T]) -> set[T]:
     elif isinstance(o, Iterable):
         raise NotImplementedError('Not ready for {type(o)}')
     return s
+
+class Condition(_ExtractableMixin, ABC):
+    @property
+    def left(self) -> Function: return self._left
+
+    @property
+    def right(self) -> Function: return self._right
+
+    @property
+    @abstractmethod
+    def operator(self) -> str:
+        pass
+
+    def key(self) -> tuple[Any, ...]:
+        return (self.operator, self.left, self.right)
+
+    def __init__(self, left: Function | float, right: Function | float) -> None:
+        self._left = _fix_const_if_float(left)
+        self._right = _fix_const_if_float(right)
+
+    def __repr__(self) -> str:
+        return f'{type(self).__name__}{repr(self.key())}'
+
+    def __str__(self) -> str:
+        return f'{self.left} {self.operator} {self.right}'
+
+class LT(Condition):
+    @property
+    def operator(self) -> str: return '<'
+
+class GT(Condition):
+    @property
+    def operator(self) -> str: return '>'
+
+class LE(Condition):
+    @property
+    def operator(self) -> str: return '<='
+
+class GE(Condition):
+    @property
+    def operator(self) -> str: return '>='
+
+@dataclass(frozen=True)
+class PiecewisePair:
+    c: Condition
+    f: Function
+
+class PiecewiseFunction(NamedFunction):
+    @property
+    def conditional_functions(self) -> tuple[PiecewisePair, ...]:
+        return self._conditional_functions
+
+    @property
+    def default_function(self) -> Function:
+        return self._default_function
+
+    def __init__(self, name: str, ders: Iterable[Var] = (),
+                 *,
+                 conditional_functions: Iterable[PiecewisePair] \
+                                      | Iterable[tuple[Condition, Function]],
+                 default_function: Function,
+                 ) -> None:
+        super().__init__(name, ders)
+        self._default_function = default_function
+
+        # Allows using list of tuples instead of list of PiecewisePairs, so
+        # that the user doesn't need to import PiecewisePair or verbosely
+        # repeating the constructor call
+
+        type type_tpp = tuple[PiecewisePair, ...]
+        type type_tcf = tuple[Condition, Function]
+        l = list(conditional_functions)
+        if not l:
+            self._conditional_functions = cast(type_tpp, ())
+        elif isinstance(l[0], PiecewisePair):
+            l_p = cast(list[PiecewisePair], l)
+            self._conditional_functions = tuple(l_p)
+        elif isinstance(l[0], tuple):
+            l_t = cast(list[type_tcf], l)
+            self._conditional_functions = tuple(PiecewisePair(c, f) for c, f in l_t)
+        else:
+            raise TypeError(f'Illegal type {type(l[0])} for conditional functions list')
+
+    def key(self) -> tuple[Any, ...]:
+        return (self.name, self.conditional_functions, self.default_function, self.ders)
+
+    def der(self, v: Var) -> Function:
+        all_ders: set[Function] = set()
+        conditionals: list[PiecewisePair] = []
+
+        for pp in self.conditional_functions:
+            d = pp.f.der(v)
+            all_ders.add(d)
+            conditionals.append(PiecewisePair(pp.c, d))
+
+        d = self.default_function.der(v)
+        all_ders.add(d)
+
+        return ZERO if all_ders == {ZERO} else \
+                PiecewiseFunction(self.name, tuple([*self.ders, v]),
+                                  conditional_functions=conditionals,
+                                  default_function=d)
+
+    def __str__(self) -> str:
+        return _named_function_str(self.name, self.ders)
+
+x = PiecewiseFunction('p', conditional_functions=(PiecewisePair(LT(X, ZERO), ONE),), default_function=TWO)
+print(repr(x))
