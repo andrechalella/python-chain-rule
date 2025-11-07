@@ -405,5 +405,32 @@ class ChainTestClass(TestCase):
     def test_arctan(self):
         self.assertEqual(Arctan.factory(X).der(X), Inv(Sum.factory(ONE, Sq(X))))
 
+    def test_condition(self):
+        self.assertEqual(ZERO << 1, LT(ZERO, ONE))
+        self.assertEqual(0 >> ONE, GT(ZERO, ONE))
+        self.assertEqual(str(X << Y), f'{X} < {Y}')
+
+    def test_piecewise_function(self):
+        f = [Sin(X), Cos(Y), Arctan(Z)]
+        c = [ X << ZERO, Y >> Z**2 ]
+        p = PiecewiseFunction.factory({c[0]: f[0], c[1]: f[1]}, f[2])
+
+        # str() test
+        self.assertEqual(str(p),
+                         f'({c[0]} ? {f[0]} : ({c[1]} ? {f[1]} : {f[2]}))')
+
+        # .der() test
+        for v in X, Y, Z:
+            self.assertEqual(p.der(v),
+                 PiecewiseFunction.factory({c[0]: f[0].der(v),
+                                            c[1]: f[1].der(v)},
+                                           f[2].der(v)))
+
+        # collapse to ZERO test
+        self.assertEqual(p.der(Var('?')), ZERO)
+
+        # Catch error when < is used (bool) instead of <<
+        self.assertRaises(TypeError, PiecewiseFunction.factory, [{X < Y: ZERO}, ZERO])
+
 if __name__ == '__main__':
     unittest_main()

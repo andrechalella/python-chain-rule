@@ -39,6 +39,45 @@ class _HasKey(ABC):
     def key(self) -> Any:
         pass
 
+class _ReprMixin(_HasKey):
+    def __repr__(self) -> str:
+        key = repr(self.key())
+        if key[0] != '(':
+            key = f'({key})'
+        return f'{type(self).__name__}{key}'
+
+class _ComparableMixin(_HasKey):
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, float | int):
+            other = _k(other)
+        elif not isinstance(other, _ComparableMixin):
+            return NotImplemented
+        t1 = type(self)
+        t2 = type(other)
+        if t1 != t2:
+            return _SORT_ORDER.index(t1) < _SORT_ORDER.index(t2)
+        else:
+            return self.key() < other.key() # type: ignore
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, float | int):
+            other = _k(other)
+        if not isinstance(other, _ComparableMixin):
+            return False
+        return type(self) == type(other) and self.key() == other.key()
+
+    def __gt__(self, other: object) -> bool:
+        return not self.__lt__(other) and not self.__eq__(other)
+    def __le__(self, other: object) -> bool:
+        return self.__lt__(other) or self.__eq__(other)
+    def __ge__(self, other: object) -> bool:
+        return not self.__lt__(other)
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(( type(self), self.key() ))
+
 class _ExtractableMixin(_HasKey):
     # Hashable is needed for the @cache decorator in _extract_any, but this is a
     # bug (mypy bugs 11469 and 11470), since type objects are always hashable
@@ -53,38 +92,13 @@ class _ExtractableMixin(_HasKey):
         s2 = _extract_any(self.key(), t)
         return s1 | s2
 
-class Function(_ExtractableMixin, _HasKey, ABC):
+class _AllKeyMixins(_ExtractableMixin, _ComparableMixin, _ReprMixin):
+    pass
+
+class Function(_AllKeyMixins, ABC):
     @abstractmethod
     def der(self, v: Var) -> Function:
         pass
-
-    def __lt__(self, other: object) -> bool:
-        if isinstance(other, float | int):
-            other = _k(other)
-        elif not isinstance(other, Function):
-            return NotImplemented
-        t1 = type(self)
-        t2 = type(other)
-        if t1 != t2:
-            return _SORT_ORDER.index(t1) < _SORT_ORDER.index(t2)
-        else:
-            return self.key() < other.key() # type: ignore
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, float | int):
-            other = _k(other)
-        if not isinstance(other, Function):
-            return False
-        return type(self) == type(other) and self.key() == other.key()
-
-    def __gt__(self, other: object) -> bool:
-        return not self.__lt__(other) and not self.__eq__(other)
-    def __le__(self, other: object) -> bool:
-        return self.__lt__(other) or self.__eq__(other)
-    def __ge__(self, other: object) -> bool:
-        return not self.__lt__(other)
-    def __ne__(self, other: object) -> bool:
-        return not self.__eq__(other)
 
     def __add__(self, other: object) -> Function:
         if not isinstance(other, Function | float | int): return NotImplemented
@@ -120,14 +134,24 @@ class Function(_ExtractableMixin, _HasKey, ABC):
     __radd__ = __add__
     __rmul__ = __mul__
 
-    def __repr__(self) -> str:
-        key = repr(self.key())
-        if key[0] != '(':
-            key = f'({key})'
-        return f'{type(self).__name__}{key}'
+    # << and >> are our shortcuts for LT and GT Conditions, since the usual
+    # ones are taken
 
-    def __hash__(self) -> int:
-        return hash(( type(self), self.key() ))
+    def __lshift__(self, other: object) -> Condition:
+        if not isinstance(other, Function | float | int): return NotImplemented
+        return LT(self, other)
+
+    def __rlshift__(self, other: object) -> Condition:
+        if not isinstance(other, Function | float | int): return NotImplemented
+        return LT(other, self)
+
+    def __rshift__(self, other: object) -> Condition:
+        if not isinstance(other, Function | float | int): return NotImplemented
+        return GT(self, other)
+
+    def __rrshift__(self, other: object) -> Condition:
+        if not isinstance(other, Function | float | int): return NotImplemented
+        return GT(other, self)
 
 class FunctionVariadic(Function):
     @property
@@ -883,26 +907,6 @@ def _parens_if_sum_prod_frac_times(x: Function) -> str:
     else:
         return str(x)
 
-_SORT_ORDER = (
-    Const,
-    ConstName,
-    Var,
-    Sum,
-    Minus,
-    Times,
-    Prod,
-    Inv,
-    Frac,
-    Sq,
-    Sqrt,
-    Pow,
-    Sin,
-    Cos,
-    Arctan,
-    ExplicitFunction,
-    OpaqueFunction,
-    )
-
 @dataclass
 class _DataClass(ABC):
     @abstractmethod
@@ -1062,7 +1066,7 @@ def _extract_any[T: Hashable](o: Any, t: type[T]) -> set[T]:
         raise NotImplementedError('Not ready for {type(o)}')
     return s
 
-class Condition(_ExtractableMixin, ABC):
+class Condition(_AllKeyMixins, ABC):
     @property
     def left(self) -> Function: return self._left
 
@@ -1081,11 +1085,14 @@ class Condition(_ExtractableMixin, ABC):
         self._left = _fix_const_if_float(left)
         self._right = _fix_const_if_float(right)
 
-    def __repr__(self) -> str:
-        return f'{type(self).__name__}{repr(self.key())}'
-
     def __str__(self) -> str:
         return f'{self.left} {self.operator} {self.right}'
+
+    # For ease of importing
+    LT: type[Condition]
+    GT: type[Condition]
+    LE: type[Condition]
+    GE: type[Condition]
 
 class LT(Condition):
     @property
@@ -1103,12 +1110,29 @@ class GE(Condition):
     @property
     def operator(self) -> str: return '>='
 
-@dataclass(frozen=True)
-class PiecewisePair:
-    c: Condition
-    f: Function
+Condition.LT = LT
+Condition.GT = GT
+Condition.LE = LE
+Condition.GE = GE
 
-class PiecewiseFunction(NamedFunction):
+class PiecewisePair(_AllKeyMixins):
+    @property
+    def c(self) -> Condition: return self._c
+
+    @property
+    def f(self) -> Function: return self._f
+
+    def __init__(self, c: Condition, f: Function) -> None:
+        self._c = c
+        self._f = f
+
+    def __str__(self) -> str:
+        return f'({self.c} ? {self.f})'
+
+    def key(self) -> tuple[Condition, Function]:
+        return (self.c, self.f)
+
+class PiecewiseFunction(Function):
     @property
     def conditional_functions(self) -> tuple[PiecewisePair, ...]:
         return self._conditional_functions
@@ -1117,55 +1141,71 @@ class PiecewiseFunction(NamedFunction):
     def default_function(self) -> Function:
         return self._default_function
 
-    def __init__(self, name: str, ders: Iterable[Var] = (),
-                 *,
-                 conditional_functions: Iterable[PiecewisePair] \
-                                      | Iterable[tuple[Condition, Function]],
-                 default_function: Function,
-                 ) -> None:
-        super().__init__(name, ders)
+    def __init__(self,
+                 conditional_functions: Iterable[PiecewisePair],
+                 default_function: Function) -> None:
+        self._conditional_functions = tuple(conditional_functions)
         self._default_function = default_function
 
-        # Allows using list of tuples instead of list of PiecewisePairs, so
-        # that the user doesn't need to import PiecewisePair or verbosely
-        # repeating the constructor call
+    @staticmethod
+    def factory(conditional_functions_dict: dict[Condition, Function | float],
+                default_function: Function | float) -> PiecewiseFunction:
 
-        type type_tpp = tuple[PiecewisePair, ...]
-        type type_tcf = tuple[Condition, Function]
-        l = list(conditional_functions)
-        if not l:
-            self._conditional_functions = cast(type_tpp, ())
-        elif isinstance(l[0], PiecewisePair):
-            l_p = cast(list[PiecewisePair], l)
-            self._conditional_functions = tuple(l_p)
-        elif isinstance(l[0], tuple):
-            l_t = cast(list[type_tcf], l)
-            self._conditional_functions = tuple(PiecewisePair(c, f) for c, f in l_t)
-        else:
-            raise TypeError(f'Illegal type {type(l[0])} for conditional functions list')
+        if any(isinstance(k, bool) for k in conditional_functions_dict.keys()):
+            raise TypeError('Found bool instead of Condition as key. '
+                            'Did you use < instead of << ?')
+        # dict order is guaranteed (insertion order) since Python 3.7
+        return PiecewiseFunction(
+                [PiecewisePair(c, _fix_const_if_float(f)) for c, f in
+                    conditional_functions_dict.items()],
+                _fix_const_if_float(default_function))
 
     def key(self) -> tuple[Any, ...]:
-        return (self.name, self.conditional_functions, self.default_function, self.ders)
+        return (self.conditional_functions, self.default_function)
 
     def der(self, v: Var) -> Function:
         all_ders: set[Function] = set()
         conditionals: list[PiecewisePair] = []
 
         for pp in self.conditional_functions:
-            d = pp.f.der(v)
+            c, f = pp.key()
+            d = f.der(v)
             all_ders.add(d)
-            conditionals.append(PiecewisePair(pp.c, d))
+            conditionals.append(PiecewisePair(c, d))
 
         d = self.default_function.der(v)
         all_ders.add(d)
 
         return ZERO if all_ders == {ZERO} else \
-                PiecewiseFunction(self.name, tuple([*self.ders, v]),
-                                  conditional_functions=conditionals,
+                PiecewiseFunction(conditional_functions=conditionals,
                                   default_function=d)
 
     def __str__(self) -> str:
-        return _named_function_str(self.name, self.ders)
+        s = str(self.default_function)
+        for pp in reversed(self.conditional_functions):
+            s = f'({pp.c} ? {pp.f} : {s})'
+        return s
 
-x = PiecewiseFunction('p', conditional_functions=(PiecewisePair(LT(X, ZERO), ONE),), default_function=TWO)
-print(repr(x))
+    # For ease of importing
+    PiecewisePair: type[PiecewisePair] = PiecewisePair
+
+_SORT_ORDER = (
+    Const,
+    ConstName,
+    Var,
+    Sum,
+    Minus,
+    Times,
+    Prod,
+    Inv,
+    Frac,
+    Sq,
+    Sqrt,
+    Pow,
+    Sin,
+    Cos,
+    Arctan,
+    ExplicitFunction,
+    OpaqueFunction,
+    PiecewiseFunction,
+    )
