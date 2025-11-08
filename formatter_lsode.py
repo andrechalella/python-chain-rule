@@ -5,7 +5,7 @@ from functools import singledispatchmethod, cached_property
 from formatter_fortran import FortranFormatter
 from chain import (
     Function, Const, ConstName, Var, NamedFunction, ExplicitFunction,
-    OpaqueFunction, ZERO
+    OpaqueFunction, PiecewiseFunction, Condition, ZERO
 )
 import lsode_program
 
@@ -113,26 +113,32 @@ class LsodeFormatter(FortranFormatter):
     # Repeating needed because @singledispatchmethod doesn't work well with inheritance
     @singledispatchmethod
     def format(self, f: Function) -> str:
+        if isinstance(f, PiecewiseFunction):
+            # Fortran doesn't have a conditional operator (ternary operator),
+            # so piecewise functions can only be defined in function
+            # definitions. (Actually it has, but it's very new and no compiler
+            # implemented it yet.)
+            raise TypeError('In LSODE, PiecewiseFunction must be in ExplicitFunction.')
         return super().format(f)
 
     # Overrides for using vectors, e.g turning Var "XG" into "y(1)"
 
     @format.register
-    def _var(self, f: Var) -> str:
+    def _format_var(self, f: Var) -> str:
         """
         Outputs the Var's reference in the 'y' vector.
         """
         return f'y({1 + self.y.index(f)})'
 
     @format.register
-    def _const(self, f: Const) -> str:
+    def _format_const(self, f: Const) -> str:
         """
         Const as float with 'dp' kind.
         """
         return f'{f.number}_dp'
 
     @format.register
-    def _const_name(self, f: ConstName) -> str:
+    def _format_const_name(self, f: ConstName) -> str:
         """
         Outputs the ConstName's reference in the 'y' vector.
 
@@ -143,7 +149,7 @@ class LsodeFormatter(FortranFormatter):
         return f'y({1 + self.neq + self.c.index(f)})'
 
     @format.register
-    def _named(self, f: NamedFunction) -> str:
+    def _format_named(self, f: NamedFunction) -> str:
         """
         Outputs the NamedFunction's reference in the 'y' vector.
 
@@ -152,6 +158,10 @@ class LsodeFormatter(FortranFormatter):
         *  Fortran 'y' = Python 'y' + 'c' + 'a'
         """
         return f'y({1 + self.n_yc + self.a_eval_order.index(f)})'
+
+    # no format.register because Condition is not a Function
+    def _format_condition(self, c: Condition) -> str:
+        return f'{self.format(c.left)} {c.operator} {self.format(c.right)}'
 
     def _get_function_name(self, f: NamedFunction) -> str:
         """
@@ -168,13 +178,27 @@ class LsodeFormatter(FortranFormatter):
                 f.name,
             ])
 
+    def _piecewise_body(self, pf: PiecewiseFunction) -> str:
+        body = ' '.join(_TEMPLATE_PIECEWISE.format(
+                            condition=self._format_condition(pp.c),
+                            function=self.format(pp.f)) \
+                                    for pp in pf.conditional_functions)
+        body = f'  {body}\n    res = {self.format(pf.default_function)}\n  end if'
+        return body
+
     def _named_function_definition(self, nf: NamedFunction) -> str:
+        if isinstance(nf, ExplicitFunction):
+            if isinstance(nf.f, PiecewiseFunction):
+                body = self._piecewise_body(nf.f)
+            else:
+                body = f'  res = {self.format(nf.f)}'
+        elif isinstance(nf, OpaqueFunction):
+            body = '  ! missing opaque definition'
+        else:
+            raise TypeError('Unknown type of NamedFunction: {type(nf)}')
         return _TEMPLATE_FUNCTION_DEFINITION.format(
                 name=self._get_function_name(nf),
-                body=
-                    f'  res = {self.format(nf.f)}' \
-                        if isinstance(nf, ExplicitFunction) else
-                        '  ! missing opaque definition')
+                body=body)
 
     def _make_update_a(self) -> str:
         assignments = [f'  {self.format(nf)} = {self._get_function_name(nf)}(y)' \
@@ -249,6 +273,12 @@ real(dp) function {name}(y) result(res)
   real(dp), intent(in) :: y(*)
 {body}
 end function"""
+
+# First line indent is intentionally off because of the way we assemble
+_TEMPLATE_PIECEWISE = """\
+if ({condition}) then
+    res = {function}
+  else"""
 
 _TEMPLATE_UPDATE_A = """\
 subroutine update_a(y)

@@ -5,6 +5,7 @@ from formatter_base import Formatter
 from chain import (
     Function, Const, ConstName, Var, Sum, Prod, Times, Minus, Frac, Pow, Sqrt,
     Inv, Sin, Cos, Arctan, NamedFunction, ExplicitFunction, OpaqueFunction
+    PiecewiseFunction
 )
 
 class FortranFormatter(Formatter):
@@ -23,6 +24,10 @@ class FortranFormatter(Formatter):
     # Repeating needed because @singledispatchmethod doesn't work well with inheritance
     @singledispatchmethod
     def format(self, f: Function) -> str:
+        if isinstance(f, PiecewiseFunction):
+            # Fortran doesn't have a conditional operator (ternary operator),
+            # so a piecewise function cannot be defined as an expression.
+            raise TypeError('PiecewiseFunction is not supported in regular Fortran expressions.')
         return super().format(f)
 
     @format.register
