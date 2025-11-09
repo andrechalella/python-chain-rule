@@ -1,7 +1,7 @@
 import math
 from chain import (
     Arctan, ConstName, Cos, Sin, Sq, Sqrt, NamedFunction, ExplicitFunction,
-    Var, PiecewiseFunction, ZERO
+    Var, PiecewiseFunction, Sgn, Abs, Mod, ZERO, Const
 )
 
 from formatter_lsode import LsodeFormatter
@@ -32,29 +32,31 @@ cosg = ExplicitFunction('cosg', XTL/LTL)
 sing = ExplicitFunction('sing', YTL/LTL)
 gam = ExplicitFunction('gamma', Arctan(tang))
 
+# Normalized alpha: -pi <= a2 < pi
+a2 = ExplicitFunction('a2', Mod(a + math.pi, Const(2*math.pi)) - math.pi)
+
 FPDmax = ConstName('FPDmax')
 FPDbow = ConstName('FPDbow')
 FPDaft = ConstName('FPDaft')
-FPD1 = ExplicitFunction('FPD1', FPDmax*(FPDbow + (1-FPDbow)*Sq(Sin(a))))
-FPD2 = ExplicitFunction('FPD2', FPDmax*(FPDaft + (1-FPDaft)*Sq(Sin(a))))
+FPD1 = ExplicitFunction('FPD1', FPDmax*(FPDbow + (1-FPDbow)*Sq(Sin(a2))))
+FPD2 = ExplicitFunction('FPD2', FPDmax*(FPDaft + (1-FPDaft)*Sq(Sin(a2))))
 
 FPD = ExplicitFunction('FPD',
         PiecewiseFunction.factory({
-            a << PI/2: FPD1,
-            a << PI:   FPD2,
-        }, ZERO))
+            Abs(a2) << PI/2: FPD1,
+        }, FPD2))
 
 xCPmax = ConstName('xCPmax')
 xCPmed = ConstName('xCPmed')
 xCP = ExplicitFunction('xCP', xCPmax*Sq(Cos(a/2)) + (xCPmed - xCPmax/2)*Sq(Sin(a)))
 
 FPLmax = ConstName('FPLmax')
-FPL1 = ExplicitFunction('FPL1', FPLmax*Sq(Sin(2*a)))
-FPL2 = ExplicitFunction('FPL2', FPLmax*Sq(Cos(4*(a-PI/4))))
+FPL1 = ExplicitFunction('FPL1', FPLmax*Sin(2*a2))
+FPL2 = ExplicitFunction('FPL2', FPLmax*Sgn(a2)*Sq(Cos(4*(a2-PI/4))))
 FPL = ExplicitFunction('FPL',
        PiecewiseFunction.factory({
-        a << PI/4:   FPL1,
-        a << 3*PI/8: FPL2,
+        Abs(a) << PI/4:   FPL1,
+        Abs(a) << 3*PI/8: FPL2,
         }, ZERO))
 
 RX = ExplicitFunction('RX', FPD - FTL*cosg)
@@ -69,7 +71,7 @@ Iz = ConstName('Iz')
 ode_y = [XG, YG, a, XG_dot, YG_dot, a_dot]
 ode_f = [XG_dot, YG_dot, a_dot, RX/m, RY/m, M/Iz]
 
-LWL = 10.
+LWL = 30.
 tf_to_N = 9.80665e3
 
 # Determination of kTL
@@ -98,8 +100,8 @@ consts = {PI: math.pi,
           FPDmax: 10.*tf_to_N,
           FPDbow: .1,
           FPDaft: .2,
-          m: 1e4,
-          Iz: 1e5,
+          m: 3e5,
+          Iz: 3e5*LWL/2,
           FPDmax: 10. * tf_to_N,
           FPLmax: 3. * tf_to_N,
           }
@@ -110,9 +112,10 @@ with open('fmain.f90', 'w') as f:
     f.write(lf.make_functions_file())
 with open('main.f90', 'w') as f:
     f.write(lf.make_program_file(
-                y0=[100.0, .0, .0, .0, .0, .0],
+                y0=[100.0, .0, math.pi/2, .0, .0, .0],
                 consts=consts,
-                tout=600.,
+                tout=10.,
+                num_steps=10,
                 rtol=1e-4,
                 atol=[1., 1., .01, 1., 1., .01],
                 ))

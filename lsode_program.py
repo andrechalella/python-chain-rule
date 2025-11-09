@@ -4,16 +4,16 @@ def make_program_file(*,
                       neq: int,
                       n_yca: int,
                       y0: Iterable[float],
-                      t0: float = 0.,
+                      t0: float,
                       consts: Iterable[tuple[int, str, float]],
                       tout: float,
                       rtol: float | Iterable[float],
                       atol: float | Iterable[float],
-                      num_steps: int = 1,
-                      tout_multiplier: float = 10.,
-                      mf: int = 21,
-                      itask: int = 1,
-                      iopt: int = 0,
+                      num_steps: int,
+                      tout_multiplier: float,
+                      mf: int,
+                      itask: int,
+                      iopt: int,
                       ) -> str:
     """
     Generates a modern Fortran main program to run a DLSODE simulation,
@@ -60,6 +60,8 @@ def make_program_file(*,
     y_list = ", ".join([f"y({i+1})" for i in range(neq)])
     inline_write_format = f"'(\" At t =\", ES12.4, \"   y =\", {neq}ES14.6)'"
 
+    tout_expression = f'+ {_dp(tout)}' if tout_multiplier == 1.0 else f'* {_dp(tout_multiplier)}'
+
     return _TEMPLATE_PROGRAM.format(
             neq=neq,
             n_yca=n_yca,
@@ -75,7 +77,7 @@ def make_program_file(*,
             atol_init='\n'.join(atol_init),
             t0=_dp(t0),
             tout=_dp(tout),
-            tout_multiplier=_dp(tout_multiplier),
+            tout_expression=tout_expression,
             y_init='\n'.join(y_init),
             consts_init='\n'.join(consts_init),
             num_steps=num_steps,
@@ -168,7 +170,7 @@ program lsode_program
       stop "Error halt"
     end if
 
-    tout = tout * {tout_multiplier} !
+    tout = tout {tout_expression}
   end do
 
   ! --- Final Statistics ---

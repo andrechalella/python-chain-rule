@@ -1189,6 +1189,42 @@ class PiecewiseFunction(Function):
     # For ease of importing
     PiecewisePair: type[PiecewisePair] = PiecewisePair
 
+class Sgn(FunctionSimple):
+    @staticmethod
+    def factory(f: Function) -> Function:
+        return Sgn(f)
+
+    @property
+    def selfder(self) -> Function:
+        return ZERO
+
+    def __str__(self) -> str:
+        return f'sgn({self.f})'
+
+class Abs(FunctionSimple):
+    @staticmethod
+    def factory(f: Function) -> Function:
+        return Abs(f)
+
+    @property
+    def selfder(self) -> Function:
+        return Sgn.factory(self.f)
+
+    def __str__(self) -> str:
+        return f'abs({self.f})'
+
+class Mod(FunctionWithCardinality):
+    @staticmethod
+    def factory(f: Function, nf: Const | float) -> Function:
+        return Mod(f, _fix_const(nf))
+
+    @property
+    def selfder(self) -> Const:
+        return ONE
+
+    def __str__(self) -> str:
+          return f'{self.f} % {self.n}'
+
 _SORT_ORDER = (
     Const,
     ConstName,
@@ -1205,6 +1241,9 @@ _SORT_ORDER = (
     Sin,
     Cos,
     Arctan,
+    Sgn,
+    Abs,
+    Mod,
     ExplicitFunction,
     OpaqueFunction,
     PiecewiseFunction,

@@ -237,7 +237,7 @@ class LsodeFormatter(FortranFormatter):
                           rtol: float | Iterable[float],
                           atol: float | Iterable[float],
                           num_steps: int = 1,
-                          tout_multiplier: float = 10.,
+                          tout_multiplier: float = 1.,
                           mf: int = 21,
                           itask: int = 1,
                           iopt: int = 0,
