@@ -25,7 +25,11 @@ YTL = ExplicitFunction('YTL', YG - (xG - xT)*Sin(a))
 LTL = ExplicitFunction('LTL', Sqrt(Sq(XTL) + Sq(YTL)))
 kTL = ConstName('kTL')
 LTL0 = ConstName('LTL0')
-FTL = ExplicitFunction('FTL', (LTL - LTL0)*kTL)
+dLTL = ExplicitFunction('dLTL', (LTL - LTL0))
+FTL = ExplicitFunction('FTL',
+        PiecewiseFunction.factory({
+            dLTL >> ZERO: (LTL - LTL0)*kTL,
+        }, ZERO))
 
 tang = ExplicitFunction('tang', YTL/XTL)
 cosg = ExplicitFunction('cosg', XTL/LTL)
@@ -60,7 +64,7 @@ FPL = ExplicitFunction('FPL',
         }, ZERO))
 
 RX = ExplicitFunction('RX', FPD - FTL*cosg)
-RY = ExplicitFunction('RY', FPL + FTL*sing)
+RY = ExplicitFunction('RY', FPL - FTL*sing)
 M = ExplicitFunction('M', FTL*Sin(a + gam)*(xG - xT)   \
                         - FPD*(xG - xCP)*Sin(a)     \
                         + FPL*(xG - xCP)*Cos(a))
@@ -115,7 +119,7 @@ with open('main.f90', 'w') as f:
                 y0=[100.0, .0, math.pi/2, .0, .0, .0],
                 consts=consts,
                 tout=10.,
-                num_steps=10,
+                num_steps=100,
                 rtol=1e-4,
                 atol=[1., 1., .01, 1., 1., .01],
                 ))
