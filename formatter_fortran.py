@@ -3,8 +3,9 @@ from functools import singledispatchmethod
 
 from formatter_base import Formatter
 from chain import (
-    Function, Const, ConstName, Var, Sum, Prod, Times, Minus, Frac, Pow, Sqrt,
-    Inv, Sin, Cos, Arctan, NamedFunction, ExplicitFunction, OpaqueFunction
+    ONE, Function, Const, ConstName, Var, Sum, Prod, Times, Minus, Frac, Pow,
+    Sqrt, Inv, Sin, Cos, Arctan, Sgn, Abs, Mod, NamedFunction,
+    ExplicitFunction, OpaqueFunction, PiecewiseFunction
 )
 
 class FortranFormatter(Formatter):
@@ -23,6 +24,10 @@ class FortranFormatter(Formatter):
     # Repeating needed because @singledispatchmethod doesn't work well with inheritance
     @singledispatchmethod
     def format(self, f: Function) -> str:
+        if isinstance(f, PiecewiseFunction):
+            # Fortran doesn't have a conditional operator (ternary operator),
+            # so a piecewise function cannot be defined as an expression.
+            raise TypeError('PiecewiseFunction is not supported in regular Fortran expressions.')
         return super().format(f)
 
     @format.register
@@ -86,6 +91,18 @@ class FortranFormatter(Formatter):
     @format.register
     def _atan(self, f: Arctan) -> str:
         return f"atan({self.format(f.f)})"
+
+    @format.register
+    def _sgn(self, f: Sgn) -> str:
+        return f"sign({self.format(ONE)}, {self.format(f.f)})"
+
+    @format.register
+    def _abs(self, f: Abs) -> str:
+        return f"abs({self.format(f.f)})"
+
+    @format.register
+    def _mod(self, f: Mod) -> str:
+        return f"modulo({self.format(f.f)}, {self.format(f.n)})"
 
     def _get_function_str_with_ders(self, f: NamedFunction) -> str:
         return self.prefix_der.join([f.name, *[str(v) for v in f.ders]])

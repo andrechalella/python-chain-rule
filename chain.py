@@ -27,17 +27,56 @@ class _HasN:
 class _HasVars:
     @property
     def vars_(self) -> tuple[Var, ...]: return self._vars_
-    def __init__(self, vars_: tuple[Var, ...]) -> None: self._vars_ = vars_
+    def __init__(self, vars_: Iterable[Var]) -> None: self._vars_ = tuple(vars_)
 
 class _HasDers:
     @property
     def ders(self) -> tuple[Var, ...]: return self._ders
-    def __init__(self, ders: tuple[Var, ...]) -> None: self._ders = ders
+    def __init__(self, ders: Iterable[Var]) -> None: self._ders = tuple(ders)
 
 class _HasKey(ABC):
     @abstractmethod
     def key(self) -> Any:
         pass
+
+class _ReprMixin(_HasKey):
+    def __repr__(self) -> str:
+        key = repr(self.key())
+        if key[0] != '(':
+            key = f'({key})'
+        return f'{type(self).__name__}{key}'
+
+class _ComparableMixin(_HasKey):
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, float | int):
+            other = _k(other)
+        elif not isinstance(other, _ComparableMixin):
+            return NotImplemented
+        t1 = type(self)
+        t2 = type(other)
+        if t1 != t2:
+            return _SORT_ORDER.index(t1) < _SORT_ORDER.index(t2)
+        else:
+            return self.key() < other.key() # type: ignore
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, float | int):
+            other = _k(other)
+        if not isinstance(other, _ComparableMixin):
+            return False
+        return type(self) == type(other) and self.key() == other.key()
+
+    def __gt__(self, other: object) -> bool:
+        return not self.__lt__(other) and not self.__eq__(other)
+    def __le__(self, other: object) -> bool:
+        return self.__lt__(other) or self.__eq__(other)
+    def __ge__(self, other: object) -> bool:
+        return not self.__lt__(other)
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(( type(self), self.key() ))
 
 class _ExtractableMixin(_HasKey):
     # Hashable is needed for the @cache decorator in _extract_any, but this is a
@@ -53,38 +92,13 @@ class _ExtractableMixin(_HasKey):
         s2 = _extract_any(self.key(), t)
         return s1 | s2
 
-class Function(_ExtractableMixin, _HasKey, ABC):
+class _AllKeyMixins(_ExtractableMixin, _ComparableMixin, _ReprMixin):
+    pass
+
+class Function(_AllKeyMixins, ABC):
     @abstractmethod
     def der(self, v: Var) -> Function:
         pass
-
-    def __lt__(self, other: object) -> bool:
-        if isinstance(other, float | int):
-            other = _k(other)
-        elif not isinstance(other, Function):
-            return NotImplemented
-        t1 = type(self)
-        t2 = type(other)
-        if t1 != t2:
-            return _SORT_ORDER.index(t1) < _SORT_ORDER.index(t2)
-        else:
-            return self.key() < other.key() # type: ignore
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, float | int):
-            other = _k(other)
-        if not isinstance(other, Function):
-            return False
-        return type(self) == type(other) and self.key() == other.key()
-
-    def __gt__(self, other: object) -> bool:
-        return not self.__lt__(other) and not self.__eq__(other)
-    def __le__(self, other: object) -> bool:
-        return self.__lt__(other) or self.__eq__(other)
-    def __ge__(self, other: object) -> bool:
-        return not self.__lt__(other)
-    def __ne__(self, other: object) -> bool:
-        return not self.__eq__(other)
 
     def __add__(self, other: object) -> Function:
         if not isinstance(other, Function | float | int): return NotImplemented
@@ -120,14 +134,24 @@ class Function(_ExtractableMixin, _HasKey, ABC):
     __radd__ = __add__
     __rmul__ = __mul__
 
-    def __repr__(self) -> str:
-        key = repr(self.key())
-        if key[0] != '(':
-            key = f'({key})'
-        return f'{type(self).__name__}{key}'
+    # << and >> are our shortcuts for LT and GT Conditions, since the usual
+    # ones are taken
 
-    def __hash__(self) -> int:
-        return hash(( type(self), self.key() ))
+    def __lshift__(self, other: object) -> Condition:
+        if not isinstance(other, Function | float | int): return NotImplemented
+        return LT(self, other)
+
+    def __rlshift__(self, other: object) -> Condition:
+        if not isinstance(other, Function | float | int): return NotImplemented
+        return LT(other, self)
+
+    def __rshift__(self, other: object) -> Condition:
+        if not isinstance(other, Function | float | int): return NotImplemented
+        return GT(self, other)
+
+    def __rrshift__(self, other: object) -> Condition:
+        if not isinstance(other, Function | float | int): return NotImplemented
+        return GT(other, self)
 
 class FunctionVariadic(Function):
     @property
@@ -722,25 +746,25 @@ class Arctan(FunctionSimple):
         return f'atan({self.f})'
 
 class NamedFunction(Function, _HasName, _HasDers):
-    def __init__(self, name: str, ders: tuple[Var, ...] = ()) -> None:
+    def __init__(self, name: str, ders: Iterable[Var] = ()) -> None:
         _HasName.__init__(self, name)
         _HasDers.__init__(self, ders)
 
 class ExplicitFunction(NamedFunction, _HasF):
-    def __init__(self, name: str, f: Function, ders: tuple[Var, ...] = ()) -> None:
+    def __init__(self, name: str, f: Function, ders: Iterable[Var] = ()) -> None:
         super().__init__(name, ders)
         _HasF.__init__(self, f)
 
     def der(self, v: Var) -> Function:
         d = self.f.der(v)
-        return d if d == ZERO else \
+        return ZERO if d == ZERO else \
             ExplicitFunction(self.name, d, _append_var(self.ders, v))
 
     def key(self) -> tuple[Any, ...]:
         return (self.name, self.f, self.ders)
 
     def __str__(self) -> str:
-        return _user_function_str(self.name, self.ders)
+        return _named_function_str(self.name, self.ders)
 
 class OpaqueFunction(NamedFunction, _HasVars):
     def __init__(self, name: str,
@@ -760,9 +784,9 @@ class OpaqueFunction(NamedFunction, _HasVars):
         return (self.name, self.vars_, self.ders)
 
     def __str__(self) -> str:
-        return _user_function_str(self.name, self.ders)
+        return _named_function_str(self.name, self.ders)
 
-def _user_function_str(name: str, ders: tuple[Var, ...]) -> str:
+def _named_function_str(name: str, ders: tuple[Var, ...]) -> str:
     if not ders:
         #return f'f[{name}]'
         return name
@@ -863,10 +887,7 @@ def _fix_const(x: Const | float) -> Const:
     return cast(Const, _fix_const_if_float(x))
 
 def _fix_const_if_float(x: Function | float) -> Function:
-    if isinstance(x, int | float):
-        return _k(x)
-    else:
-        return x
+    return _k(x) if isinstance(x, int | float) else x
 
 def _fix_consts_in_iterable(it: Iterable[Function | float]) -> list[Function]:
     ret: list[Function] = []
@@ -885,26 +906,6 @@ def _parens_if_sum_prod_frac_times(x: Function) -> str:
         return f'({x})'
     else:
         return str(x)
-
-_SORT_ORDER = (
-    Const,
-    ConstName,
-    Var,
-    Sum,
-    Minus,
-    Times,
-    Prod,
-    Inv,
-    Frac,
-    Sq,
-    Sqrt,
-    Pow,
-    Sin,
-    Cos,
-    Arctan,
-    ExplicitFunction,
-    OpaqueFunction,
-    )
 
 @dataclass
 class _DataClass(ABC):
@@ -1064,3 +1065,186 @@ def _extract_any[T: Hashable](o: Any, t: type[T]) -> set[T]:
     elif isinstance(o, Iterable):
         raise NotImplementedError('Not ready for {type(o)}')
     return s
+
+class Condition(_AllKeyMixins, ABC):
+    @property
+    def left(self) -> Function: return self._left
+
+    @property
+    def right(self) -> Function: return self._right
+
+    @property
+    @abstractmethod
+    def operator(self) -> str:
+        pass
+
+    def key(self) -> tuple[Any, ...]:
+        return (self.operator, self.left, self.right)
+
+    def __init__(self, left: Function | float, right: Function | float) -> None:
+        self._left = _fix_const_if_float(left)
+        self._right = _fix_const_if_float(right)
+
+    def __str__(self) -> str:
+        return f'{self.left} {self.operator} {self.right}'
+
+    # For ease of importing
+    LT: type[Condition]
+    GT: type[Condition]
+    LE: type[Condition]
+    GE: type[Condition]
+
+class LT(Condition):
+    @property
+    def operator(self) -> str: return '<'
+
+class GT(Condition):
+    @property
+    def operator(self) -> str: return '>'
+
+class LE(Condition):
+    @property
+    def operator(self) -> str: return '<='
+
+class GE(Condition):
+    @property
+    def operator(self) -> str: return '>='
+
+Condition.LT = LT
+Condition.GT = GT
+Condition.LE = LE
+Condition.GE = GE
+
+class PiecewisePair(_AllKeyMixins):
+    @property
+    def c(self) -> Condition: return self._c
+
+    @property
+    def f(self) -> Function: return self._f
+
+    def __init__(self, c: Condition, f: Function) -> None:
+        self._c = c
+        self._f = f
+
+    def __str__(self) -> str:
+        return f'({self.c} ? {self.f})'
+
+    def key(self) -> tuple[Condition, Function]:
+        return (self.c, self.f)
+
+class PiecewiseFunction(Function):
+    @property
+    def conditional_functions(self) -> tuple[PiecewisePair, ...]:
+        return self._conditional_functions
+
+    @property
+    def default_function(self) -> Function:
+        return self._default_function
+
+    def __init__(self,
+                 conditional_functions: Iterable[PiecewisePair],
+                 default_function: Function) -> None:
+        self._conditional_functions = tuple(conditional_functions)
+        self._default_function = default_function
+
+    @staticmethod
+    def factory(conditional_functions_dict: dict[Condition, Function | float],
+                default_function: Function | float) -> PiecewiseFunction:
+
+        if any(isinstance(k, bool) for k in conditional_functions_dict.keys()):
+            raise TypeError('Found bool instead of Condition as key. '
+                            'Did you use < instead of << ?')
+        # dict order is guaranteed (insertion order) since Python 3.7
+        return PiecewiseFunction(
+                [PiecewisePair(c, _fix_const_if_float(f)) for c, f in
+                    conditional_functions_dict.items()],
+                _fix_const_if_float(default_function))
+
+    def key(self) -> tuple[Any, ...]:
+        return (self.conditional_functions, self.default_function)
+
+    def der(self, v: Var) -> Function:
+        all_ders: set[Function] = set()
+        conditionals: list[PiecewisePair] = []
+
+        for pp in self.conditional_functions:
+            c, f = pp.key()
+            d = f.der(v)
+            all_ders.add(d)
+            conditionals.append(PiecewisePair(c, d))
+
+        d = self.default_function.der(v)
+        all_ders.add(d)
+
+        return ZERO if all_ders == {ZERO} else \
+                PiecewiseFunction(conditional_functions=conditionals,
+                                  default_function=d)
+
+    def __str__(self) -> str:
+        s = str(self.default_function)
+        for pp in reversed(self.conditional_functions):
+            s = f'({pp.c} ? {pp.f} : {s})'
+        return s
+
+    # For ease of importing
+    PiecewisePair: type[PiecewisePair] = PiecewisePair
+
+class Sgn(FunctionSimple):
+    @staticmethod
+    def factory(f: Function) -> Function:
+        return Sgn(f)
+
+    @property
+    def selfder(self) -> Function:
+        return ZERO
+
+    def __str__(self) -> str:
+        return f'sgn({self.f})'
+
+class Abs(FunctionSimple):
+    @staticmethod
+    def factory(f: Function) -> Function:
+        return Abs(f)
+
+    @property
+    def selfder(self) -> Function:
+        return Sgn.factory(self.f)
+
+    def __str__(self) -> str:
+        return f'abs({self.f})'
+
+class Mod(FunctionWithCardinality):
+    @staticmethod
+    def factory(f: Function, nf: Const | float) -> Function:
+        return Mod(f, _fix_const(nf))
+
+    @property
+    def selfder(self) -> Const:
+        return ONE
+
+    def __str__(self) -> str:
+          return f'{self.f} % {self.n}'
+
+_SORT_ORDER = (
+    Const,
+    ConstName,
+    Var,
+    Sum,
+    Minus,
+    Times,
+    Prod,
+    Inv,
+    Frac,
+    Sq,
+    Sqrt,
+    Pow,
+    Sin,
+    Cos,
+    Arctan,
+    Sgn,
+    Abs,
+    Mod,
+    ExplicitFunction,
+    OpaqueFunction,
+    PiecewiseFunction,
+    )
