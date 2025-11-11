@@ -1,4 +1,9 @@
 import math
+
+# until we structure packages
+import sys
+sys.path.insert(1, '/home/andre/chain')
+
 from chain import (
     Arctan, ConstName, Cos, Sin, Sq, Sqrt, NamedFunction, ExplicitFunction,
     Var, PiecewiseFunction, Sgn, Abs, Mod, ZERO, Const
@@ -112,14 +117,11 @@ consts = {PI: math.pi,
 
 lf = LsodeFormatter(ode_y, ode_f)
 
-with open('fmain.f90', 'w') as f:
-    f.write(lf.make_functions_file())
-with open('main.f90', 'w') as f:
-    f.write(lf.make_program_file(
-                y0=[100.0, .0, math.pi/2, .0, .0, .0],
-                consts=consts,
-                tout=10.,
-                num_steps=100,
-                rtol=1e-4,
-                atol=[1., 1., .01, 1., 1., .01],
-                ))
+make_program_file_kwargs = {
+        'y0': [100.0, .0, math.pi/2, .0, .0, .0],
+        'consts': consts,
+        'tout': 10.,
+        'num_steps': 100,
+        'rtol': 1e-4,
+        'atol': [1., 1., .01, 1., 1., .01],
+        }
