@@ -4,83 +4,40 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import cast, Any, Iterable, Callable
 from collections.abc import Hashable
-from functools import cache
+from functools import cache, total_ordering
 from dataclasses import dataclass
 import math
 import dataclasses
 
-class _HasName:
-    @property
-    def name(self) -> str: return self._name
-    def __init__(self, name: str) -> None: self._name = name
+@total_ordering
+class _KeyMixin():
+    def key(self) -> tuple[Hashable, ...]:
+        if dataclasses.is_dataclass(self):
+            # shallow version of dataclasses.astuple()
+            l = []
+            for field in dataclasses.fields(self):
+                o = getattr(self, field.name)
+                if isinstance(o, Hashable):
+                    l.append(o)
+                else:
+                    raise TypeError('Non-Hashable attribute not allowed: {type(o)}.')
+            return tuple(l)
+        raise TypeError('_KeyMixin inherited but class is not @dataclass')
 
-class _HasF:
-    @property
-    def f(self) -> Function: return self._f
-    def __init__(self, f: Function) -> None: self._f = f
-
-class _HasN:
-    @property
-    def n(self) -> Const: return self._n
-    def __init__(self, n: Const) -> None: self._n = n
-
-class _HasVars:
-    @property
-    def vars_(self) -> tuple[Var, ...]: return self._vars_
-    def __init__(self, vars_: Iterable[Var]) -> None: self._vars_ = tuple(vars_)
-
-class _HasDers:
-    @property
-    def ders(self) -> tuple[Var, ...]: return self._ders
-    def __init__(self, ders: Iterable[Var]) -> None: self._ders = tuple(ders)
-
-class _HasKey(ABC):
-    @abstractmethod
-    def key(self) -> Any:
-        pass
-
-class _ReprMixin(_HasKey):
-    def __repr__(self) -> str:
-        key = repr(self.key())
-        if key[0] != '(':
-            key = f'({key})'
-        return f'{type(self).__name__}{key}'
-
-class _ComparableMixin(_HasKey):
     def __lt__(self, other: object) -> bool:
         if isinstance(other, float | int):
             other = _k(other)
-        elif not isinstance(other, _ComparableMixin):
+        elif not isinstance(other, _KeyMixin):
             return NotImplemented
         t1 = type(self)
         t2 = type(other)
         if t1 != t2:
             return _SORT_ORDER.index(t1) < _SORT_ORDER.index(t2)
-        else:
-            return self.key() < other.key() # type: ignore
+        return self.key() < other.key()
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, float | int):
-            other = _k(other)
-        if not isinstance(other, _ComparableMixin):
-            return False
-        return type(self) == type(other) and self.key() == other.key()
-
-    def __gt__(self, other: object) -> bool:
-        return not self.__lt__(other) and not self.__eq__(other)
-    def __le__(self, other: object) -> bool:
-        return self.__lt__(other) or self.__eq__(other)
-    def __ge__(self, other: object) -> bool:
-        return not self.__lt__(other)
-    def __ne__(self, other: object) -> bool:
-        return not self.__eq__(other)
-
-    def __hash__(self) -> int:
-        return hash(( type(self), self.key() ))
-
-class _ExtractableMixin(_HasKey):
-    # Hashable is needed for the @cache decorator in _extract_any, but this is a
-    # bug (mypy bugs 11469 and 11470), since type objects are always hashable
+    # @cache brings chaos to type checking, so we implement our own simple cache
+    # https://github.com/python/typeshed/issues/11280
+    #_extract_cache: dict[tuple[_KeyMixin, type
     def extract[T: Hashable](self, t: type[T]) -> set[T]:
         """
         Recursively extracts all instances of a given type found in self and
@@ -92,10 +49,7 @@ class _ExtractableMixin(_HasKey):
         s2 = _extract_any(self.key(), t)
         return s1 | s2
 
-class _AllKeyMixins(_ExtractableMixin, _ComparableMixin, _ReprMixin):
-    pass
-
-class Function(_AllKeyMixins, ABC):
+class Function(_KeyMixin, ABC):
     @abstractmethod
     def der(self, v: Var) -> Function:
         pass
@@ -139,44 +93,32 @@ class Function(_AllKeyMixins, ABC):
 
     def __lshift__(self, other: object) -> Condition:
         if not isinstance(other, Function | float | int): return NotImplemented
-        return LT(self, other)
+        return Condition.LT(self, _fix_const_if_float(other))
 
     def __rlshift__(self, other: object) -> Condition:
         if not isinstance(other, Function | float | int): return NotImplemented
-        return LT(other, self)
+        return Condition.LT(_fix_const_if_float(other), self)
 
     def __rshift__(self, other: object) -> Condition:
         if not isinstance(other, Function | float | int): return NotImplemented
-        return GT(self, other)
+        return Condition.GT(self, _fix_const_if_float(other))
 
     def __rrshift__(self, other: object) -> Condition:
         if not isinstance(other, Function | float | int): return NotImplemented
-        return GT(other, self)
+        return Condition.GT(_fix_const_if_float(other), self)
 
+@dataclass(frozen=True)
 class FunctionVariadic(Function):
-    @property
-    def args(self) -> tuple[Function, ...]:
-        return self._args
-
-    def key(self) -> tuple[Function, ...]:
-        return self.args
-
-    def __init__(self, *args: Function) -> None:
-        self._args = args
+    args: tuple[Function, ...]
 
     @staticmethod
     @abstractmethod
     def factory(*args: Function) -> Function:
         pass
 
-class FunctionWithSingleFunction(Function, _HasF):
-    def __init__(self, f: Function) -> None:
-        _HasF.__init__(self, f)
-
-    @abstractmethod
-    def copy(self, f: Function) -> Function:
-        """Reconstruct with another function argument"""
-        pass
+@dataclass(frozen=True)
+class FunctionWithSingleFunction(Function):
+    f: Function
 
     @property
     @abstractmethod
@@ -193,47 +135,30 @@ class FunctionSimple(FunctionWithSingleFunction):
     def factory(f: Function) -> Function:
         pass
 
-    def copy(self, f: Function) -> Function:
-        return self.factory(f)
-
-    def key(self) -> Function:
-        return self.f
-
-class FunctionWithCardinality(FunctionWithSingleFunction, _HasN):
-    def key(self) -> tuple[Function, ...]:
-        return (self.f, self.n)
-
-    def __init__(self, f: Function, n: Const):
-        _HasF.__init__(self, f)
-        _HasN.__init__(self, n)
-
-    def copy(self, f: Function) -> Function:
-        return self.factory(f, self.n)
+@dataclass(frozen=True)
+class FunctionWithCardinality(FunctionWithSingleFunction):
+    n: Const
 
     @staticmethod
     @abstractmethod
     def factory(f: Function, n: Const) -> Function:
         pass
 
+@dataclass(frozen=True)
 class Const(Function):
-    @property
-    def number(self) -> float:
-        return self._number
+    number: float
 
     @staticmethod
     def factory(number: float) -> Const:
         if number is True:
-            number = 1
+            number = 1.0
         elif number is False:
-            number = 0
+            number = 0.0
+        elif isinstance(number, int):
+            # float type hint includes int (PEP 484)
+            number = float(number)
 
         return Const(number)
-
-    def __init__(self, number: float) -> None:
-        self._number = float(number)
-
-    def key(self) -> float:
-        return self.number
 
     def der(self, v: Var) -> Const:
         return ZERO
@@ -289,12 +214,9 @@ HALF     : Const = Const.factory(.5)
 MINUS_ONE: Const = Const.factory(-1)
 PI       : Const = Const.factory(math.pi)
 
-class ConstName(Function, _HasName):
-    def __init__(self, name: str) -> None:
-        _HasName.__init__(self, name)
-
-    def key(self) -> str:
-        return self.name
+@dataclass(frozen=True)
+class ConstName(Function):
+    name: str
 
     def der(self, v: Var) -> Const:
         return ZERO
@@ -302,12 +224,9 @@ class ConstName(Function, _HasName):
     def __str__(self) -> str:
         return self.name
 
-class Var(Function, _HasName):
-    def __init__(self, name: str) -> None:
-        _HasName.__init__(self, name)
-
-    def key(self) -> str:
-        return self.name
+@dataclass(frozen=True)
+class Var(Function):
+    name: str
 
     def der(self, v: Var) -> Const:
         return _k(v == self)
@@ -318,6 +237,12 @@ class Var(Function, _HasName):
 X: Var = Var('x')
 Y: Var = Var('y')
 Z: Var = Var('z')
+
+def _augmented_key(o: _KeyMixin) -> tuple[Hashable, ...]:
+    return (_SORT_ORDER.index(type(o)), *o.key())
+
+def _sort_functions(iterable: Iterable[Function]) -> list[Function]:
+    return sorted(iterable, key=_augmented_key)
 
 class Sum(FunctionVariadic):
     @staticmethod
@@ -332,7 +257,7 @@ class Sum(FunctionVariadic):
             return _k(math.fsum([cast(Const, c).number for c in args_list]))
 
         lc: list[Const]
-        lc, lf = dataclasses.astuple(_flatten_sum(*args_list))
+        lc, lf = _flatten_sum(*args_list).key()
         k = math.fsum([c.number for c in lc])
         args_list = lf if k == 0 else [_k(k), *lf]
         del k, lf
@@ -344,7 +269,7 @@ class Sum(FunctionVariadic):
         elif len(args_list) == 1:
             return args_list[0]
         else:
-            return Sum(*sorted(args_list))
+            return Sum(tuple(_sort_functions(args_list)))
 
     def der(self, v: Var) -> Function:
         return Sum.factory(*[x.der(v) for x in self.args])
@@ -367,7 +292,7 @@ class Prod(FunctionVariadic):
         lc: list[Const]
         nums: list[Function]
         dens: list[Function]
-        lc, nums, dens = dataclasses.astuple(_flatten_prod(*args_list))
+        lc, nums, dens = _flatten_prod(*args_list).key()
         k = math.prod([c.number for c in lc])
         if k == 0:
             return ZERO
@@ -388,7 +313,7 @@ class Prod(FunctionVariadic):
         elif len(nums) == 1:
             return Times.factory(nums[0], k)
         else:
-            return Times.factory(Prod(*sorted(nums)), k)
+            return Times.factory(Prod(tuple(_sort_functions(nums))), k)
 
     def der(self, v: Var) -> Function:
         list_to_sum: list[Function] = []
@@ -468,7 +393,11 @@ class Minus(Times):
         else:
             return f'-{self.f}'
 
+@dataclass(frozen=True)
 class Frac(Function):
+    num: Function
+    den: Function
+
     @staticmethod
     def factory(numf: Function | float, denf: Function | float) -> Function:
         num = _fix_const_if_float(numf)
@@ -490,7 +419,7 @@ class Frac(Function):
         lc: list[Const]
         nums: list[Function]
         dens: list[Function]
-        lc, nums, dens = dataclasses.astuple(_flatten_prod(Frac(num, den)))
+        lc, nums, dens = _flatten_prod(Frac(num, den)).key()
         k = math.prod([c.number for c in lc])
         if k == 0:
             return ZERO
@@ -534,19 +463,12 @@ class Frac(Function):
             prod_list = [*fracs, Inv.factory(Prod.factory(*dens))]
         else:
             prod_list = [*fracs, Frac(Prod.factory(*nums), Prod.factory(*dens))]
-        prod_list = sorted(prod_list)
+        prod_list = _sort_functions(prod_list)
 
         if len(prod_list) > 1:
-            return Times.factory(Prod(*prod_list), k)
+            return Times.factory(Prod(tuple(prod_list)), k)
         else:
             return Times.factory(prod_list[0], k)
-
-    def key(self) -> tuple[Function, ...]:
-        return (self.num, self.den)
-
-    def __init__(self, num: Function, den: Function):
-        self.num = num
-        self.den = den
 
     def der(self, v: Var) -> Function:
         return Frac.factory(
@@ -745,43 +667,45 @@ class Arctan(FunctionSimple):
     def __str__(self) -> str:
         return f'atan({self.f})'
 
-class NamedFunction(Function, _HasName, _HasDers):
-    def __init__(self, name: str, ders: Iterable[Var] = ()) -> None:
-        _HasName.__init__(self, name)
-        _HasDers.__init__(self, ders)
+@dataclass(frozen=True)
+class NamedFunction(Function):
+    name: str
+    ders: tuple[Var, ...]
 
-class ExplicitFunction(NamedFunction, _HasF):
-    def __init__(self, name: str, f: Function, ders: Iterable[Var] = ()) -> None:
-        super().__init__(name, ders)
-        _HasF.__init__(self, f)
+@dataclass(frozen=True)
+class ExplicitFunction(NamedFunction):
+    f: Function
+
+    def __init__(self, name: str, f: Function,
+                 ders: tuple[Var, ...] | None = None) -> None:
+        """Allows optional 'ders' parameter, unlike the default dataclass constructor."""
+        super().__init__(name, () if ders == None else ders)
+        object.__setattr__(self, 'f', f)
 
     def der(self, v: Var) -> Function:
         d = self.f.der(v)
         return ZERO if d == ZERO else \
             ExplicitFunction(self.name, d, _append_var(self.ders, v))
 
-    def key(self) -> tuple[Any, ...]:
-        return (self.name, self.f, self.ders)
-
     def __str__(self) -> str:
         return _named_function_str(self.name, self.ders)
 
-class OpaqueFunction(NamedFunction, _HasVars):
-    def __init__(self, name: str,
-            vars_: tuple[Var, ...],
-            ders : tuple[Var, ...] = ()) -> None:
-        super().__init__(name, ders)
-        _HasVars.__init__(self, vars_)
+@dataclass(frozen=True)
+class OpaqueFunction(NamedFunction):
+    vars: tuple[Var, ...]
+
+    def __init__(self, name: str, vars: tuple[Var, ...],
+                 ders: tuple[Var, ...] | None = None) -> None:
+        """Allows optional 'ders' parameter, unlike the default dataclass constructor."""
+        super().__init__(name, () if ders == None else ders)
+        object.__setattr__(self, 'vars', vars)
 
     def der(self, v: Var) -> Function:
-        if v in self.vars_:
+        if v in self.vars:
             return OpaqueFunction(
-                self.name, self.vars_, _append_var(self.ders, v))
+                self.name, self.vars, _append_var(self.ders, v))
         else:
             return ZERO
-
-    def key(self) -> tuple[Any, ...]:
-        return (self.name, self.vars_, self.ders)
 
     def __str__(self) -> str:
         return _named_function_str(self.name, self.ders)
@@ -913,18 +837,24 @@ class _DataClass(ABC):
     def __init__(self) -> None:
         pass
 
-# default_factory: classes should not have [] as default list value
+# default_factory: classes should not have [] as default list value (classic
+# Python mutable default argument bug)
+# key(): correct typing, since this has introduced bugs
 
 @dataclass
 class _DataSum(_DataClass):
     consts:    list[Const]    = dataclasses.field(default_factory=list)
     functions: list[Function] = dataclasses.field(default_factory=list)
+    def key(self) -> tuple[list[Const], list[Function]]:
+        return (self.consts, self.functions)
 
 @dataclass
 class _DataFrac(_DataClass):
     consts: list[Const]    = dataclasses.field(default_factory=list)
     nums:   list[Function] = dataclasses.field(default_factory=list)
     dens:   list[Function] = dataclasses.field(default_factory=list)
+    def key(self) -> tuple[list[Const], list[Function], list[Function]]:
+        return (self.consts, self.nums, self.dens)
 
 def _merge_datas(*args: _DataClass) -> _DataClass:
     match len(args):
@@ -1047,9 +977,8 @@ def _flatten(t: type[Function], f: Function) -> _DataClass:
             return func(t, f)
     raise NotImplementedError(f"flatten() has no match for {(t,type(f))}")
 
-@cache
-def _extract_any[T: Hashable](o: Any, t: type[T]) -> set[T]:
-    if isinstance(o, _ExtractableMixin):
+def _extract_any[T](o: Hashable, t: type[T]) -> set[T]:
+    if isinstance(o, _KeyMixin):
         return o.extract(t)
 
     s = set()
@@ -1066,86 +995,41 @@ def _extract_any[T: Hashable](o: Any, t: type[T]) -> set[T]:
         raise NotImplementedError('Not ready for {type(o)}')
     return s
 
-class Condition(_AllKeyMixins, ABC):
-    @property
-    def left(self) -> Function: return self._left
+def _condition_factory(operator: str) -> Callable[[Function, Function], Condition]:
+    def factory(left: Function, right: Function) -> Condition:
+        return Condition(operator=operator, left=left, right=right)
+    return factory
 
-    @property
-    def right(self) -> Function: return self._right
-
-    @property
-    @abstractmethod
-    def operator(self) -> str:
-        pass
-
-    def key(self) -> tuple[Any, ...]:
-        return (self.operator, self.left, self.right)
-
-    def __init__(self, left: Function | float, right: Function | float) -> None:
-        self._left = _fix_const_if_float(left)
-        self._right = _fix_const_if_float(right)
+@dataclass(frozen=True,kw_only=True)
+class Condition(_KeyMixin, ABC):
+    operator: str
+    left: Function
+    right: Function
 
     def __str__(self) -> str:
         return f'{self.left} {self.operator} {self.right}'
 
-    # For ease of importing
-    LT: type[Condition]
-    GT: type[Condition]
-    LE: type[Condition]
-    GE: type[Condition]
+    LT = _condition_factory('<')
+    GT = _condition_factory('>')
+    LE = _condition_factory('<=')
+    GE = _condition_factory('>=')
 
-class LT(Condition):
-    @property
-    def operator(self) -> str: return '<'
+@dataclass(frozen=True)
+class _PiecewisePair(_KeyMixin):
+    c: Condition
+    f: Function
 
-class GT(Condition):
-    @property
-    def operator(self) -> str: return '>'
-
-class LE(Condition):
-    @property
-    def operator(self) -> str: return '<='
-
-class GE(Condition):
-    @property
-    def operator(self) -> str: return '>='
-
-Condition.LT = LT
-Condition.GT = GT
-Condition.LE = LE
-Condition.GE = GE
-
-class PiecewisePair(_AllKeyMixins):
-    @property
-    def c(self) -> Condition: return self._c
-
-    @property
-    def f(self) -> Function: return self._f
-
-    def __init__(self, c: Condition, f: Function) -> None:
-        self._c = c
-        self._f = f
+    def key(self) -> tuple[Condition, Function]:
+        """Correct type hint instead of default _KeyMixin, since this is used for unpacking."""
+        return (self.c, self.f)
 
     def __str__(self) -> str:
         return f'({self.c} ? {self.f})'
 
-    def key(self) -> tuple[Condition, Function]:
-        return (self.c, self.f)
-
+@dataclass(frozen=True,kw_only=True)
 class PiecewiseFunction(Function):
-    @property
-    def conditional_functions(self) -> tuple[PiecewisePair, ...]:
-        return self._conditional_functions
-
-    @property
-    def default_function(self) -> Function:
-        return self._default_function
-
-    def __init__(self,
-                 conditional_functions: Iterable[PiecewisePair],
-                 default_function: Function) -> None:
-        self._conditional_functions = tuple(conditional_functions)
-        self._default_function = default_function
+    conditional_functions: tuple[_PiecewisePair, ...]
+    default_function: Function
 
     @staticmethod
     def factory(conditional_functions_dict: dict[Condition, Function | float],
@@ -1156,28 +1040,26 @@ class PiecewiseFunction(Function):
                             'Did you use < instead of << ?')
         # dict order is guaranteed (insertion order) since Python 3.7
         return PiecewiseFunction(
-                [PiecewisePair(c, _fix_const_if_float(f)) for c, f in
-                    conditional_functions_dict.items()],
-                _fix_const_if_float(default_function))
-
-    def key(self) -> tuple[Any, ...]:
-        return (self.conditional_functions, self.default_function)
+                conditional_functions=tuple(
+                    _PiecewisePair(c, _fix_const_if_float(f)) for c, f in
+                        conditional_functions_dict.items()),
+                default_function=_fix_const_if_float(default_function))
 
     def der(self, v: Var) -> Function:
         all_ders: set[Function] = set()
-        conditionals: list[PiecewisePair] = []
+        conditionals: list[_PiecewisePair] = []
 
         for pp in self.conditional_functions:
             c, f = pp.key()
             d = f.der(v)
             all_ders.add(d)
-            conditionals.append(PiecewisePair(c, d))
+            conditionals.append(_PiecewisePair(c, d))
 
         d = self.default_function.der(v)
         all_ders.add(d)
 
         return ZERO if all_ders == {ZERO} else \
-                PiecewiseFunction(conditional_functions=conditionals,
+                PiecewiseFunction(conditional_functions=tuple(conditionals),
                                   default_function=d)
 
     def __str__(self) -> str:
@@ -1185,9 +1067,6 @@ class PiecewiseFunction(Function):
         for pp in reversed(self.conditional_functions):
             s = f'({pp.c} ? {pp.f} : {s})'
         return s
-
-    # For ease of importing
-    PiecewisePair: type[PiecewisePair] = PiecewisePair
 
 class Sgn(FunctionSimple):
     @staticmethod

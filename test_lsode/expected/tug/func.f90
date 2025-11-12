@@ -248,12 +248,12 @@ end function
 
 real(dp) function ef_n4_d0_LTL(y) result(res)
   real(dp), intent(in) :: y(*)
-  res = (y(21)*y(20))/(sqrt(((y(20))**2 + (y(23))**2)))
+  res = (y(20)*y(21))/(sqrt(((y(20))**2 + (y(23))**2)))
 end function
 
 real(dp) function ef_n4_d1_LTL(y) result(res)
   real(dp), intent(in) :: y(*)
-  res = (y(24)*y(23))/(sqrt(((y(20))**2 + (y(23))**2)))
+  res = (y(23)*y(24))/(sqrt(((y(20))**2 + (y(23))**2)))
 end function
 
 real(dp) function ef_n5_d2_LTL(y) result(res)
